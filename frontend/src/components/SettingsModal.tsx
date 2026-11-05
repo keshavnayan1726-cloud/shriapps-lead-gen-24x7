@@ -124,6 +124,29 @@ export default function SettingsModal({ onClose, onSaved }: Props) {
               📶 <strong>Local Home Wi-Fi</strong>: Use your PC IP: <code>http://10.90.225.190:8000</code>.
             </p>
           </div>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setUrl('http://10.90.225.190:8000')
+                setTestResult(null)
+              }}
+              className="flex-1 bg-slate-800/80 hover:bg-slate-750 active:scale-95 text-[11px] font-medium text-sky-300 py-1.5 px-2 rounded-xl border border-sky-900/50 transition-all text-center"
+            >
+              📶 Set PC Wi-Fi (10.90.225.190)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUrl('http://localhost:8000')
+                setTestResult(null)
+              }}
+              className="bg-slate-800/80 hover:bg-slate-750 active:scale-95 text-[11px] text-slate-400 py-1.5 px-2 rounded-xl border border-slate-700 transition-all text-center"
+            >
+              💻 Localhost
+            </button>
+          </div>
         </div>
 
         {/* Action Buttons */}

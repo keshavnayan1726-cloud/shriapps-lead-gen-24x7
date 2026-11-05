@@ -30,6 +30,7 @@ frontend/android/build/
 frontend/android/app/src/main/assets/public/
 *.apk
 *.aab
+*.idsig
 
 # Editor
 .vscode/

@@ -17,8 +17,18 @@ export const getApiBaseUrl = (): string => {
     return envUrl.trim().replace(/\/+$/, '')
   }
 
-  const hostname = (typeof window !== 'undefined' && window.location.hostname) || 'localhost'
-  return `http://${hostname}:8000`
+  // Detect Capacitor native app or mobile environment
+  const isCapacitor =
+    typeof window !== 'undefined' &&
+    Boolean((window as any).Capacitor?.isNativePlatform?.() || (window as any).Capacitor)
+  const hostname = (typeof window !== 'undefined' && window.location.hostname) || ''
+
+  // Inside mobile APK or when hostname is localhost, use the PC's Wi-Fi IP
+  if (isCapacitor || hostname === 'localhost' || hostname === '127.0.0.1') {
+    return 'http://10.90.225.190:8000'
+  }
+
+  return `http://${hostname || '10.90.225.190'}:8000`
 }
 
 export const setApiBaseUrl = (url: string): void => {
