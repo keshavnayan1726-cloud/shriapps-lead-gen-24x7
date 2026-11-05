@@ -19,7 +19,8 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from pathlib import Path
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -494,3 +495,35 @@ async def get_analytics(db: AsyncSession = Depends(get_db)):
         statuses=statuses,
         daily_trend=daily_trend,
     )
+
+
+@app.get("/api/download-apk")
+@app.get("/api/apk")
+async def download_apk(type: str = "release"):
+    """
+    Directly serves the compiled Android APK for single-tap phone download and install.
+    Returns standard MIME type application/vnd.android.package-archive.
+    """
+    project_root = Path(__file__).resolve().parent.parent
+    if type == "debug":
+        candidates = [
+            project_root / "ShriApps-LeadGen-Debug.apk",
+            project_root / "ShriApps-LeadGen.apk",
+            project_root / "frontend" / "android" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
+        ]
+    else:
+        candidates = [
+            project_root / "ShriApps-LeadGen-Release.apk",
+            project_root / "ShriApps-LeadGen.apk",
+            project_root / "frontend" / "android" / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk",
+        ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return FileResponse(
+                path=str(candidate),
+                media_type="application/vnd.android.package-archive",
+                filename="ShriApps-LeadGen.apk",
+            )
+
+    raise HTTPException(status_code=404, detail="APK file not found on server")

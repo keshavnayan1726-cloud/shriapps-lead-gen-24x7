@@ -33,22 +33,24 @@ npm run build
 Write-Host "Syncing Capacitor Android assets..." -ForegroundColor Cyan
 npx cap sync android
 
-# 3. Assemble Debug APK
-Write-Host "Running Gradle assembleDebug..." -ForegroundColor Cyan
+# 3. Assemble Release and Debug APKs
+Write-Host "Running Gradle assembleRelease..." -ForegroundColor Cyan
 Set-Location "$Root\frontend\android"
-.\gradlew.bat assembleDebug
+.\gradlew.bat assembleRelease
 
-# 4. Copy APK to root folder
-$ApkSrc = Join-Path $Root "frontend\android\app\build\outputs\apk\debug\app-debug.apk"
-$ApkDest = Join-Path $Root "ShriApps-LeadGen.apk"
+# 4. Copy APKs to root folder
+$RelSrc = Join-Path $Root "frontend\android\app\build\outputs\apk\release\app-release.apk"
+$RelDest = Join-Path $Root "ShriApps-LeadGen.apk"
+$RelBackup = Join-Path $Root "ShriApps-LeadGen-Release.apk"
 
-if (Test-Path $ApkSrc) {
-    Copy-Item $ApkSrc $ApkDest -Force
+if (Test-Path $RelSrc) {
+    Copy-Item $RelSrc $RelDest -Force
+    Copy-Item $RelSrc $RelBackup -Force
     Write-Host "================================================================" -ForegroundColor Green
-    Write-Host " [SUCCESS] Android APK built successfully!" -ForegroundColor Green
-    Write-Host " Location: $ApkDest" -ForegroundColor Yellow
-    Write-Host " Size:     $((Get-Item $ApkDest).Length / 1MB) MB" -ForegroundColor Cyan
+    Write-Host " [SUCCESS] Android Release APK built and signed successfully!" -ForegroundColor Green
+    Write-Host " Location: $RelDest" -ForegroundColor Yellow
+    Write-Host " Size:     $([math]::Round((Get-Item $RelDest).Length / 1MB, 2)) MB" -ForegroundColor Cyan
     Write-Host "================================================================" -ForegroundColor Green
 } else {
-    throw "APK was not generated at $ApkSrc"
+    throw "Release APK was not generated at $RelSrc"
 }
