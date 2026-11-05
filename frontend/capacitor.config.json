@@ -1,0 +1,9 @@
+{
+  "appId": "com.shriapps.leadgen",
+  "appName": "Shri Apps Lead Gen",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  }
+}

@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/venv/
+backend/.venv/
+backend/leads.db
+backend/leads.db-journal
+
+# Environment variables (keep templates)
+backend/.env
+frontend/.env
+!backend/.env.example
+!frontend/.env.example
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.npm
+npm-debug.log*
+
+# Android / Capacitor
+frontend/android/.gradle/
+frontend/android/app/build/
+frontend/android/build/
+frontend/android/app/src/main/assets/public/
+*.apk
+*.aab
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+.DS_Store

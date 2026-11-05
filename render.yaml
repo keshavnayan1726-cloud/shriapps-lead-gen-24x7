@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: shriapps-lead-gen-24x7
+    env: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: singapore
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: COMPANY_NAME
+        value: Shri Apps and Web
+      - key: AUTO_SCRAPE_ENABLED
+        value: "true"
+      - key: AUTO_SCRAPE_INTERVAL_MINUTES
+        value: "60"
+      - key: CORS_ORIGINS
+        value: "*"
