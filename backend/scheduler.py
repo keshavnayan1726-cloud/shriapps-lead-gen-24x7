@@ -408,10 +408,15 @@ async def get_scheduler_status_details() -> dict:
             )
         ).scalar_one()
 
+    agents_list = get_agents_status_list()
+    active_count = sum(1 for a in AI_AGENTS_CONFIG.values() if a.get("is_running", False))
+
     return {
         "is_enabled": config.is_enabled,
         "interval_minutes": config.interval_minutes,
-        "agents": get_agents_status_list(),
+        "current_category": "3x Simultaneous AI Hunters",
+        "agents": agents_list,
         "total_jobs_run": total_jobs or 0,
         "leads_found_today": today_leads or 0,
+        "active_jobs_count": active_count,
     }

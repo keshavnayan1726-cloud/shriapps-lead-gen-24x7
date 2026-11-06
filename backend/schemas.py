@@ -107,7 +107,8 @@ class ActivityLogOut(BaseModel):
 class SchedulerStatusResponse(BaseModel):
     is_enabled: bool
     interval_minutes: int
-    current_category: str
+    current_category: str = "3x Autonomous Fleet"
+    agents: Optional[list[AgentStatusOut]] = None
     last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None
     total_jobs_run: int = 0
