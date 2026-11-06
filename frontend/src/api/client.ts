@@ -3,6 +3,7 @@ import axios from 'axios'
 
 const STORAGE_KEY = 'shri_apps_api_base_url'
 export const CURRENT_LAN_IP = '10.83.139.190'
+export const CLOUD_API_URL = 'https://shriapps-lead-gen.onrender.com'
 
 // Dynamic host detection + localStorage override for connecting from any network
 export const getApiBaseUrl = (): string => {
@@ -29,9 +30,14 @@ export const getApiBaseUrl = (): string => {
     Boolean((window as any).Capacitor?.isNativePlatform?.() || (window as any).Capacitor)
   const hostname = (typeof window !== 'undefined' && window.location.hostname) || ''
 
-  // Inside mobile APK or when hostname is localhost, use the PC's Wi-Fi IP
-  if (isCapacitor || hostname === 'localhost' || hostname === '127.0.0.1') {
-    return `http://${CURRENT_LAN_IP}:8000`
+  // Inside mobile APK: connect to 24/7 Cloud URL first so phone works anywhere!
+  if (isCapacitor) {
+    return CLOUD_API_URL
+  }
+
+  // On local desktop/laptop browser:
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return `http://localhost:8000`
   }
 
   return `http://${hostname || CURRENT_LAN_IP}:8000`
@@ -67,6 +73,7 @@ export const autoDiscoverBackend = async (): Promise<string> => {
 
   const current = getApiBaseUrl()
   const candidates = [
+    CLOUD_API_URL,
     current,
     window.location.origin,
     `http://${window.location.hostname}:8000`,
