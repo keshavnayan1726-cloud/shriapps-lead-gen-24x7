@@ -57,19 +57,23 @@ class LeadListResponse(BaseModel):
 
 
 class ScrapeRequest(BaseModel):
-    query: str = "cafes and restaurants Gurugram"
+    query: Optional[str] = None
     max_results: int = 15
+    agent_id: Optional[int] = None
+    run_all_agents: bool = False
 
 
 class ScrapeResponse(BaseModel):
     job_id: int
     query: str
     message: str
+    agent_name: Optional[str] = None
 
 
 class ScrapeJobOut(BaseModel):
     id: int
     query: str
+    agent_name: Optional[str] = "AI Hunter"
     status: str
     leads_found: int
     leads_saved: int
@@ -78,6 +82,16 @@ class ScrapeJobOut(BaseModel):
     error_message: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class AgentStatusOut(BaseModel):
+    id: int
+    name: str
+    specialty: str
+    description: str
+    is_active: bool
+    current_target: str
+    leads_found: int = 0
 
 
 class ActivityLogOut(BaseModel):

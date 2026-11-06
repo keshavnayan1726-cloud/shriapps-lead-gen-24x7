@@ -20,9 +20,12 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from scraper import get_or_init_gemini
 
 from config import settings
 from database import (
@@ -33,6 +36,8 @@ from database import (
     get_db,
     init_db,
 )
+
+frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 from schemas import (
     ActivityLogOut,
     AnalyticsCategoryItem,
@@ -51,7 +56,9 @@ from schemas import (
     StatsResponse,
 )
 from scheduler import (
-    execute_lead_hunt,
+    execute_agent_hunt,
+    execute_all_agents_simultaneously,
+    get_agents_status_list,
     get_scheduler_status_details,
     start_scheduler,
     stop_scheduler,
@@ -69,11 +76,11 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize SQLite schemas and launch 24/7 autonomous scheduler
     await init_db()
     logger.info("Database initialised.")
-    start_scheduler()
+    await start_scheduler()
     logger.info("24/7 Lead Hunter is running.")
     yield
     # Shutdown: Stop scheduler
-    stop_scheduler()
+    await stop_scheduler()
     logger.info("Clean shutdown complete.")
 
 
@@ -113,10 +120,23 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
-# ─────────────────────────── HEALTH CHECKS ────────────────────────
+# ─────────────────────────── HEALTH & ROOT ────────────────────────
+
+@app.get("/api/info", tags=["Health"])
+async def api_info():
+    return {
+        "status": "online",
+        "system": "24/7 Lead Generation Engine",
+        "company": settings.COMPANY_NAME,
+        "location": settings.DEFAULT_LOCATION,
+    }
+
 
 @app.get("/", tags=["Health"])
 async def root():
+    index_file = frontend_dist / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
     return {
         "status": "online",
         "system": "24/7 Lead Generation Engine",
@@ -345,22 +365,61 @@ async def update_scheduler_config_endpoint(payload: SchedulerConfigRequest):
     return {"status": "updated", "message": "Scheduler settings updated."}
 
 
+@app.get("/api/agents", tags=["AI Engine"])
+async def get_agents():
+    """Returns real-time status and sector targets of all 3 parallel AI Hunters."""
+    return get_agents_status_list()
+
+
 @app.post("/api/scrape/trigger", response_model=ScrapeResponse, tags=["Scraping"])
 async def manual_trigger_scrape(
     payload: ScrapeRequest,
     background_tasks: BackgroundTasks,
 ):
-    """Trigger an immediate scrape in the background without waiting for the 24/7 timer."""
-    background_tasks.add_task(
-        execute_lead_hunt,
-        target_query=payload.query.strip(),
-        max_results=payload.max_results,
-    )
-    return ScrapeResponse(
-        job_id=0,
-        query=payload.query,
-        message=f"Scrape initiated for '{payload.query}'. Results will stream live via WebSocket.",
-    )
+    """Trigger an immediate scrape using 1 or ALL 3 AI Hunters simultaneously."""
+    if payload.run_all_agents:
+        # Launch ALL 3 AI hunters in parallel!
+        per_agent = max(6, payload.max_results // 3)
+        background_tasks.add_task(
+            execute_all_agents_simultaneously,
+            max_results_per_agent=per_agent,
+        )
+        return ScrapeResponse(
+            job_id=0,
+            query="3x Simultaneous AI Hunters (F&B, Healthcare, Retail)",
+            message="🚀 All 3 AI Hunters deployed in parallel! New qualified leads will stream live.",
+            agent_name="Triple AI Fleet",
+        )
+    elif payload.agent_id in [1, 2, 3]:
+        background_tasks.add_task(
+            execute_agent_hunt,
+            agent_id=payload.agent_id,
+            target_query=payload.query.strip() if payload.query else None,
+            max_results=payload.max_results,
+        )
+        agent_names = {1: "Hunter Alpha (F&B)", 2: "Hunter Beta (Healthcare)", 3: "Hunter Gamma (Retail/Property)"}
+        name = agent_names.get(payload.agent_id, "AI Hunter")
+        return ScrapeResponse(
+            job_id=0,
+            query=payload.query or "Specialty Rotation",
+            message=f"🚀 {name} launched! Results will stream live via WebSocket.",
+            agent_name=name,
+        )
+    else:
+        # Default single or multi
+        target = payload.query.strip() if payload.query else "restaurants in Sector 29 Gurugram"
+        background_tasks.add_task(
+            execute_agent_hunt,
+            agent_id=1,
+            target_query=target,
+            max_results=payload.max_results,
+        )
+        return ScrapeResponse(
+            job_id=0,
+            query=target,
+            message=f"Scraper launched for '{target}'. Results will stream live.",
+            agent_name="Hunter Alpha",
+        )
 
 
 @app.get("/api/scrape/jobs", response_model=list[ScrapeJobOut], tags=["Scraping"])
@@ -528,3 +587,130 @@ async def download_apk(type: str = "release"):
             )
 
     raise HTTPException(status_code=404, detail="APK file not found on server")
+
+
+# ---------------------------------------------------------------------------
+# 🧠 AI ENGINE MANAGEMENT (Latest High-Thinking Models)
+# ---------------------------------------------------------------------------
+
+class AiConfigPayload(BaseModel):
+    api_key: str
+    model: str = "gemini-2.0-flash"
+
+
+@app.get("/api/ai/status", tags=["AI Engine"])
+async def get_ai_status():
+    """Returns whether Gemini High-Thinking AI is configured and connected."""
+    m, model_name = get_or_init_gemini()
+    is_connected = m is not None
+    return {
+        "connected": is_connected,
+        "model": model_name or "Deterministic B2B Qualifier",
+        "provider": "Google Gemini" if is_connected else "Local High-IQ B2B Engine",
+        "has_api_key": bool(
+            settings.GEMINI_API_KEY
+            and settings.GEMINI_API_KEY != "your_gemini_api_key_here"
+        ),
+    }
+
+
+@app.post("/api/ai/config", tags=["AI Engine"])
+async def set_ai_config(payload: AiConfigPayload):
+    """Sets and saves Gemini API Key and reconfigures AI engine dynamically."""
+    import re
+    key = payload.api_key.strip()
+    m, model_name = get_or_init_gemini(api_key=key)
+    if not m:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid Gemini API key or could not connect to Gemini models.",
+        )
+
+    settings.GEMINI_API_KEY = key
+    # Persist to .env file
+    env_file = Path(__file__).resolve().parent / ".env"
+    if env_file.exists():
+        content = env_file.read_text(encoding="utf-8")
+        if "GEMINI_API_KEY=" in content:
+            new_content = re.sub(r"GEMINI_API_KEY=.*", f"GEMINI_API_KEY={key}", content)
+        else:
+            new_content = content + f"\nGEMINI_API_KEY={key}"
+        env_file.write_text(new_content, encoding="utf-8")
+
+    return {
+        "status": "success",
+        "message": f"Gemini High-Thinking AI connected successfully using {model_name}!",
+        "model": model_name,
+    }
+
+
+@app.post("/api/ai/test", tags=["AI Engine"])
+async def test_ai_connection():
+    """Runs a quick live test prompt on the configured AI model."""
+    import asyncio
+    m, model_name = get_or_init_gemini()
+    if not m:
+        return {
+            "success": False,
+            "message": "Gemini API key is not configured. Running on Deterministic B2B Qualifier.",
+            "mode": "fallback",
+        }
+    try:
+        res = await asyncio.to_thread(
+            m.generate_content,
+            "Say 'AI Online' and provide 1 sentence on high-converting B2B lead generation for Gurugram agencies.",
+        )
+        return {
+            "success": True,
+            "message": res.text.strip(),
+            "model": model_name,
+            "mode": "live_gemini",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e),
+            "mode": "error",
+        }
+
+
+@app.get("/download/app.apk", tags=["Mobile App"])
+@app.get("/api/download-apk", tags=["Mobile App"])
+async def download_apk():
+    """Serves the signed release Android APK directly for instant phone installation."""
+    apk_path = Path(__file__).resolve().parent.parent / "ShriApps-LeadGen.apk"
+    if not apk_path.exists():
+        raise HTTPException(status_code=404, detail="APK not found. Please rebuild.")
+    return FileResponse(
+        str(apk_path),
+        media_type="application/vnd.android.package-archive",
+        filename="ShriApps-LeadGen.apk",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 🌐 UNIFIED SINGLE-PORT FRONTEND SERVING (Zero Configuration)
+# ---------------------------------------------------------------------------
+
+if frontend_dist.exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(frontend_dist / "assets")),
+        name="frontend-assets",
+    )
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend_spa(full_path: str):
+        # Never intercept API, WS, docs, or OpenAPI endpoints
+        if (
+            full_path.startswith("api/")
+            or full_path.startswith("ws/")
+            or full_path.startswith("download/")
+            or full_path in ["docs", "openapi.json", "redoc"]
+        ):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        file_path = frontend_dist / full_path
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(frontend_dist / "index.html"))

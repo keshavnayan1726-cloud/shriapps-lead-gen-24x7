@@ -1,7 +1,9 @@
 """
-scheduler.py — 24/7 Autonomous Lead Hunter Daemon.
-Runs in the background, rotating across Gurugram business categories,
-scraping Google Maps, scoring leads with AI, and broadcasting live updates.
+scheduler.py — Multi-Agent 24/7 Autonomous Lead Hunter Daemon.
+Runs 3 AI Hunters SIMULTANEOUSLY across diverse Gurugram commercial sectors:
+  1. Hunter Alpha: F&B & Hospitality (Restaurants, Cafes, Bakeries, Cloud Kitchens)
+  2. Hunter Beta: Healthcare & Wellness (Dental, Derma, Clinics, Luxury Gyms)
+  3. Hunter Gamma: Luxury Retail & Real Estate (Jewellery, Apparel, DLF Property, Interiors)
 """
 from __future__ import annotations
 
@@ -28,27 +30,71 @@ from websocket_manager import manager
 
 logger = logging.getLogger(__name__)
 
-# Curated rotation of high-converting Gurugram commercial sectors & categories
-DEFAULT_ROTATION_QUERIES = [
-    "cafes and restaurants Gurugram",
-    "luxury salons and spas Gurugram",
-    "gyms and fitness studios Gurugram",
-    "dental clinics and implants Gurugram",
-    "boutique hotels and banquet halls Gurugram",
-    "car detailing and auto workshops Gurugram",
-    "real estate consultants and brokers Gurugram",
-    "interior designers and architects Gurugram",
-    "bakeries and dessert parlours Gurugram",
-    "chartered accountants and tax firms Gurugram",
-    "pet clinics and grooming Gurugram",
-    "pre-schools and daycare centers Gurugram",
-    "coaching institutes and academies Gurugram",
-    "skin clinics and dermatologists Gurugram",
-    "event planners and decorators Gurugram",
-]
+# --- 3 Specialized AI Agent Configurations ---
+AI_AGENTS_CONFIG = {
+    1: {
+        "id": 1,
+        "name": "Hunter Alpha",
+        "specialty": "Food, Cafes & Hospitality",
+        "badge": "🍔 F&B Specialist",
+        "description": "Targets dining brands paying 28-30% commissions to aggregators to sell direct ordering & apps.",
+        "sectors": [
+            "cafes and restaurants in Sector 29 Gurugram",
+            "fine dine and restrobars in Cyber Hub Gurugram",
+            "bakeries and cloud kitchens in Golf Course Road Gurugram",
+            "breweries and lounges in Sector 29 Gurugram",
+            "family dining in Galleria Market Gurugram",
+            "cafes and bistro in 32nd Avenue Gurugram",
+            "takeaway and cloud kitchens in Sohna Road Gurugram",
+        ],
+        "current_index": 0,
+        "is_active": True,
+        "is_running": False,
+        "leads_found": 0,
+    },
+    2: {
+        "id": 2,
+        "name": "Hunter Beta",
+        "specialty": "Healthcare, Clinics & Fitness",
+        "badge": "🏥 Healthcare & Gyms",
+        "description": "Targets medical & fitness practices to sell automated WhatsApp booking & member apps.",
+        "sectors": [
+            "dental clinics and implants in South City Gurugram",
+            "dermatologists and skin clinics in Golf Course Extension Gurugram",
+            "luxury gyms and fitness studios in Sector 56 Gurugram",
+            "physiotherapy and wellness centers in Sohna Road Gurugram",
+            "yoga and pilates studios in Sushant Lok Gurugram",
+            "salons and luxury spas in Sector 14 Gurugram",
+            "eye clinics and diagnostics in Sector 43 Gurugram",
+        ],
+        "current_index": 0,
+        "is_active": True,
+        "is_running": False,
+        "leads_found": 0,
+    },
+    3: {
+        "id": 3,
+        "name": "Hunter Gamma",
+        "specialty": "Luxury Retail & Real Estate",
+        "badge": "💎 Retail & Property",
+        "description": "Targets high-ticket retailers & DLF property consultants needing portfolio apps & NRI lead portals.",
+        "sectors": [
+            "real estate consultants and brokers in DLF Phase 5 Gurugram",
+            "jewellery showrooms and boutiques in Gold Souk Mall Gurugram",
+            "interior designers and luxury architects in Sector 49 Gurugram",
+            "property advisors and luxury homes in Golf Course Road Gurugram",
+            "boutique designer wear in MG Road Gurugram",
+            "home automation and luxury decor in Nirvana Country Gurugram",
+            "coaching institutes and test prep in Sector 14 Gurugram",
+        ],
+        "current_index": 0,
+        "is_active": True,
+        "is_running": False,
+        "leads_found": 0,
+    },
+}
 
 _scheduler: Optional[AsyncIOScheduler] = None
-_is_job_executing: bool = False
 
 
 async def get_or_create_config() -> SchedulerConfig:
@@ -62,7 +108,7 @@ async def get_or_create_config() -> SchedulerConfig:
                 is_enabled=settings.AUTO_SCRAPE_ENABLED,
                 interval_minutes=settings.AUTO_SCRAPE_INTERVAL_MINUTES,
                 current_category_index=0,
-                custom_queries=json.dumps(DEFAULT_ROTATION_QUERIES),
+                custom_queries=json.dumps([]),
             )
             db.add(config)
             await db.commit()
@@ -70,286 +116,302 @@ async def get_or_create_config() -> SchedulerConfig:
         return config
 
 
-def get_queries_list(config: SchedulerConfig) -> list[str]:
-    """Parse custom queries or fallback to default queries."""
-    if config.custom_queries:
-        try:
-            items = json.loads(config.custom_queries)
-            if isinstance(items, list) and items:
-                return items
-        except Exception:
-            pass
-    return DEFAULT_ROTATION_QUERIES
+def get_agents_status_list() -> list[dict]:
+    """Returns current runtime state of all 3 AI Hunters."""
+    res = []
+    for aid, agent in AI_AGENTS_CONFIG.items():
+        idx = agent["current_index"] % len(agent["sectors"])
+        target = agent["sectors"][idx]
+        res.append({
+            "id": agent["id"],
+            "name": agent["name"],
+            "specialty": agent["specialty"],
+            "badge": agent["badge"],
+            "description": agent["description"],
+            "is_active": agent["is_active"],
+            "is_running": agent["is_running"],
+            "current_target": target,
+            "leads_found": agent["leads_found"],
+        })
+    return res
 
 
-async def execute_lead_hunt(target_query: Optional[str] = None, max_results: Optional[int] = None) -> dict:
+async def execute_agent_hunt(
+    agent_id: int,
+    target_query: Optional[str] = None,
+    max_results: Optional[int] = None,
+) -> dict:
     """
-    Core autonomous scraping & enrichment unit.
-    Safely executes Playwright + Gemini AI, stores leads, and broadcasts live events.
+    Executes a single AI Hunter independently.
+    Can run concurrently alongside the other 2 hunters without conflict.
     """
-    global _is_job_executing
-    if _is_job_executing:
-        logger.warning("A lead hunt cycle is already executing. Skipping concurrent trigger.")
-        return {"status": "busy", "message": "Scraper is currently active."}
+    agent = AI_AGENTS_CONFIG.get(agent_id)
+    if not agent:
+        return {"status": "error", "message": f"Agent {agent_id} not found."}
 
-    _is_job_executing = True
+    if agent["is_running"]:
+        logger.warning(f"{agent['name']} is already running. Skipping trigger.")
+        return {"status": "busy", "message": f"{agent['name']} is currently busy."}
+
+    agent["is_running"] = True
     max_count = max_results or settings.AUTO_SCRAPE_MAX_RESULTS
 
+    # Determine sector query for this agent
+    if not target_query:
+        idx = agent["current_index"] % len(agent["sectors"])
+        target_query = agent["sectors"][idx]
+        agent["current_index"] = (idx + 1) % len(agent["sectors"])
+
     async with AsyncSessionLocal() as db:
-        config = await get_or_create_config()
-        queries = get_queries_list(config)
-
-        if not target_query:
-            idx = config.current_category_index % len(queries)
-            target_query = queries[idx]
-            # Advance rotation pointer
-            config.current_category_index = (idx + 1) % len(queries)
-
-        config.last_run_at = datetime.now(timezone.utc)
-        await db.commit()
-
-        # 1. Create ScrapeJob record
+        # Create ScrapeJob record
         job = ScrapeJob(
             query=target_query,
+            agent_name=agent["name"],
             status="running",
             leads_found=0,
             leads_saved=0,
         )
         db.add(job)
-
-        # 2. Add ActivityLog
-        activity = ActivityLog(
-            event_type="scrape_started",
-            title=f"24/7 AI Scraper Initiated",
-            description=f"Scanning Google Maps for '{target_query}' (target: up to {max_count} businesses).",
-        )
-        db.add(activity)
         await db.commit()
         await db.refresh(job)
 
-    # Broadcast event to mobile dashboards
-    await manager.broadcast(
-        "SCRAPE_STARTED",
-        {"job_id": job.id, "query": target_query, "status": "running"},
-    )
+        # Log and Broadcast Start Event
+        log_entry = ActivityLog(
+            event_type="scrape_started",
+            title=f"🤖 {agent['name']} Dispatched",
+            description=f"Hunter active for '{target_query}' (Target: {max_count} businesses).",
+        )
+        db.add(log_entry)
+        await db.commit()
 
-    leads_found = 0
-    leads_saved = 0
-    error_msg = None
+        await manager.broadcast({
+            "type": "AGENT_STARTED",
+            "agent_id": agent["id"],
+            "agent_name": agent["name"],
+            "job_id": job.id,
+            "query": target_query,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    saved_count = 0
+    found_count = 0
+    error_msg: Optional[str] = None
 
     try:
-        # Run scraping and AI enrichment
-        enriched_leads = await run_scrape_pipeline(target_query, max_count)
-        leads_found = len(enriched_leads)
+        # Run Playwright Scraping & AI Enrichment
+        enriched_leads = await run_scrape_pipeline(
+            query=target_query,
+            max_results=max_count,
+        )
+        found_count = len(enriched_leads)
 
         async with AsyncSessionLocal() as db:
-            for item in enriched_leads:
-                # Check duplication by phone or exact business name
-                existing = None
-                if item.phone:
-                    q = await db.execute(select(Lead).where(Lead.phone == item.phone))
-                    existing = q.scalar_one_or_none()
-
-                if not existing and item.business_name:
-                    q = await db.execute(
-                        select(Lead).where(
-                            func.lower(Lead.business_name) == item.business_name.strip().lower()
-                        )
-                    )
-                    existing = q.scalar_one_or_none()
+            for el in enriched_leads:
+                # Deduplicate by business_name + phone or address
+                stmt = select(Lead).where(Lead.business_name == el.business_name)
+                existing = (await db.execute(stmt)).scalar_one_or_none()
 
                 if not existing:
                     new_lead = Lead(
-                        business_name=item.business_name,
-                        category=item.category,
-                        address=item.address,
-                        phone=item.phone,
-                        website=item.website,
-                        email=item.email,
-                        rating=item.rating,
-                        reviews_count=item.reviews_count,
-                        lead_score=item.lead_score,
-                        problems_identified=item.problems_identified,
-                        sales_pitch=item.sales_pitch,
-                        source_query=target_query,
+                        business_name=el.business_name,
+                        category=el.category,
+                        address=el.address,
+                        phone=el.phone,
+                        website=el.website,
+                        email=el.email,
+                        rating=el.rating,
+                        reviews_count=el.reviews_count,
+                        lead_score=el.lead_score,
+                        problems_identified=el.problems_identified,
+                        sales_pitch=el.sales_pitch,
+                        source_query=el.source_query,
                     )
                     db.add(new_lead)
-                    leads_saved += 1
+                    saved_count += 1
 
-            # Update Job & Log
-            db_job = await db.get(ScrapeJob, job.id)
-            if db_job:
-                db_job.status = "completed"
-                db_job.leads_found = leads_found
-                db_job.leads_saved = leads_saved
-                db_job.completed_at = datetime.now(timezone.utc)
+            agent["leads_found"] += saved_count
 
-            completion_log = ActivityLog(
+            # Update job record
+            job_obj = await db.get(ScrapeJob, job.id)
+            if job_obj:
+                job_obj.status = "completed"
+                job_obj.leads_found = found_count
+                job_obj.leads_saved = saved_count
+                job_obj.completed_at = datetime.now(timezone.utc)
+
+            log_finish = ActivityLog(
                 event_type="scrape_completed",
-                title=f"AI Lead Hunt Complete ({leads_saved} new leads)",
-                description=f"Found {leads_found} businesses for '{target_query}'. Added {leads_saved} unique prospects to pipeline.",
+                title=f"✅ {agent['name']}: {saved_count} Leads Added",
+                description=f"Found {found_count} businesses, added {saved_count} new leads for '{target_query}'.",
             )
-            db.add(completion_log)
+            db.add(log_finish)
             await db.commit()
 
-        # Broadcast completion
-        await manager.broadcast(
-            "SCRAPE_COMPLETED",
-            {
-                "job_id": job.id,
-                "query": target_query,
-                "leads_found": leads_found,
-                "leads_saved": leads_saved,
-            },
-        )
-        logger.info(f"✅ Lead hunt complete: {leads_saved} new leads saved for '{target_query}'.")
+        logger.info(f"✅ {agent['name']} finished: {saved_count} leads saved for '{target_query}'.")
+
+        await manager.broadcast({
+            "type": "AGENT_COMPLETED",
+            "agent_id": agent["id"],
+            "agent_name": agent["name"],
+            "job_id": job.id,
+            "query": target_query,
+            "leads_found": found_count,
+            "leads_saved": saved_count,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
     except Exception as e:
-        logger.error(f"❌ Lead hunt failed for '{target_query}': {e}", exc_info=True)
         error_msg = str(e)
-        async with AsyncSessionLocal() as db:
-            db_job = await db.get(ScrapeJob, job.id)
-            if db_job:
-                db_job.status = "failed"
-                db_job.error_message = error_msg
-                db_job.completed_at = datetime.now(timezone.utc)
+        logger.error(f"❌ {agent['name']} error for '{target_query}': {e}", exc_info=True)
 
-            err_log = ActivityLog(
-                event_type="error",
-                title=f"Scraper Error on '{target_query}'",
-                description=f"Error encountered: {error_msg}",
-            )
-            db.add(err_log)
+        async with AsyncSessionLocal() as db:
+            job_obj = await db.get(ScrapeJob, job.id)
+            if job_obj:
+                job_obj.status = "failed"
+                job_obj.error_message = error_msg
+                job_obj.completed_at = datetime.now(timezone.utc)
             await db.commit()
 
-        await manager.broadcast(
-            "SCRAPE_FAILED",
-            {"job_id": job.id, "query": target_query, "error": error_msg},
-        )
+        await manager.broadcast({
+            "type": "AGENT_FAILED",
+            "agent_id": agent["id"],
+            "agent_name": agent["name"],
+            "job_id": job.id,
+            "error": error_msg,
+        })
     finally:
-        _is_job_executing = False
+        agent["is_running"] = False
 
     return {
-        "job_id": job.id,
+        "agent_id": agent["id"],
+        "agent_name": agent["name"],
+        "status": "completed" if not error_msg else "failed",
+        "leads_saved": saved_count,
         "query": target_query,
-        "leads_found": leads_found,
-        "leads_saved": leads_saved,
-        "error": error_msg,
     }
 
 
-async def _scheduled_task_wrapper():
-    """Wrapper invoked by APScheduler on each interval tick."""
-    try:
-        config = await get_or_create_config()
-        if not config.is_enabled:
-            logger.info("Autonomous scheduler is paused. Skipping scheduled tick.")
-            return
+async def execute_all_agents_simultaneously(max_results_per_agent: int = 12) -> list[dict]:
+    """
+    Launches all 3 AI Hunters in parallel simultaneously.
+    Triple lead acquisition rate across F&B, Healthcare, and Luxury Retail/Real Estate.
+    """
+    logger.info("🚀 Launching ALL 3 AI Hunters simultaneously in parallel!")
+    tasks = [
+        execute_agent_hunt(agent_id=1, max_results=max_results_per_agent),
+        execute_agent_hunt(agent_id=2, max_results=max_results_per_agent),
+        execute_agent_hunt(agent_id=3, max_results=max_results_per_agent),
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    clean_results = []
+    for r in results:
+        if isinstance(r, Exception):
+            clean_results.append({"status": "error", "message": str(r)})
+        else:
+            clean_results.append(r)
+    return clean_results
 
-        logger.info("⏰ 24/7 Autonomous scheduler triggered scheduled lead hunt.")
-        await execute_lead_hunt()
-    except Exception as e:
-        logger.error(f"Unexpected error in scheduled task: {e}")
+
+async def _scheduled_parallel_tick():
+    """Timer callback triggered 24/7 by APScheduler: fires all 3 agents simultaneously."""
+    config = await get_or_create_config()
+    if not config.is_enabled:
+        return
+    logger.info("⏰ 24/7 Scheduler Tick: Launching 3 simultaneous hunters!")
+    await execute_all_agents_simultaneously(max_results_per_agent=12)
 
 
-def start_scheduler():
-    """Initialize and start the 24/7 background scheduler."""
+async def start_scheduler():
+    """Initializes and activates the 24/7 background scheduler."""
     global _scheduler
     if _scheduler and _scheduler.running:
         return
 
+    config = await get_or_create_config()
     _scheduler = AsyncIOScheduler()
     _scheduler.add_job(
-        _scheduled_task_wrapper,
-        trigger=IntervalTrigger(minutes=settings.AUTO_SCRAPE_INTERVAL_MINUTES),
-        id="auto_lead_hunter",
-        name="24/7 Gurugram Business Hunter",
+        _scheduled_parallel_tick,
+        trigger=IntervalTrigger(minutes=config.interval_minutes),
+        id="triple_ai_lead_hunter",
+        name="3x Simultaneous Gurugram Lead Hunters",
         replace_existing=True,
     )
     _scheduler.start()
-    logger.info(
-        f"🚀 24/7 Lead Generation Daemon started! Interval: {settings.AUTO_SCRAPE_INTERVAL_MINUTES} mins."
-    )
+    logger.info(f"🚀 24/7 Triple AI Lead Hunter started! Interval: {config.interval_minutes} mins.")
 
 
-def stop_scheduler():
-    """Gracefully stop the background scheduler on shutdown."""
+async def stop_scheduler():
+    """Halts the 24/7 autonomous scheduler."""
     global _scheduler
     if _scheduler and _scheduler.running:
         _scheduler.shutdown(wait=False)
-        logger.info("24/7 Lead Generation Daemon stopped.")
+        _scheduler = None
+        logger.info("🛑 24/7 Autonomous Scheduler stopped.")
 
 
-async def toggle_scheduler(enabled: Optional[bool] = None) -> bool:
-    """Pause or resume the 24/7 auto scraper."""
+async def toggle_scheduler(enable: bool) -> bool:
+    """Toggles scheduler active state in database and controls background daemon."""
     async with AsyncSessionLocal() as db:
         config = await get_or_create_config()
-        if enabled is None:
-            config.is_enabled = not config.is_enabled
+        config.is_enabled = enable
+        await db.commit()
+
+        if enable:
+            await start_scheduler()
         else:
-            config.is_enabled = enabled
+            await stop_scheduler()
+
+        log_entry = ActivityLog(
+            event_type="scheduler_toggle",
+            title=f"3x AI Hunter {'Resumed' if enable else 'Paused'}",
+            description=f"24/7 Simultaneous Hunter Daemon {'active' if enable else 'paused'} by user.",
+        )
+        db.add(log_entry)
         await db.commit()
 
-        event = "scheduler_resumed" if config.is_enabled else "scheduler_paused"
-        title = "24/7 AI Scraper Resumed" if config.is_enabled else "24/7 AI Scraper Paused"
-        db.add(ActivityLog(event_type=event, title=title))
-        await db.commit()
+        await manager.broadcast({
+            "type": "SCHEDULER_TOGGLED",
+            "is_enabled": enable,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
-        await manager.broadcast("SCHEDULER_STATUS", {"is_enabled": config.is_enabled})
-        return config.is_enabled
+    return enable
 
 
-async def update_scheduler_settings(interval_minutes: Optional[int] = None, custom_queries: Optional[str] = None):
-    """Update interval timing and target rotation categories."""
-    global _scheduler
+async def update_scheduler_settings(
+    interval_minutes: Optional[int] = None,
+    custom_queries: Optional[list[str]] = None,
+) -> None:
+    """Updates scheduler interval and custom category queries."""
     async with AsyncSessionLocal() as db:
         config = await get_or_create_config()
-        if interval_minutes and interval_minutes >= 5:
+        if interval_minutes:
             config.interval_minutes = interval_minutes
-            if _scheduler and _scheduler.running:
-                _scheduler.reschedule_job(
-                    "auto_lead_hunter",
-                    trigger=IntervalTrigger(minutes=interval_minutes),
-                )
-        if custom_queries is not None:
-            config.custom_queries = custom_queries
+        if custom_queries:
+            config.custom_queries = json.dumps(custom_queries)
         await db.commit()
 
 
 async def get_scheduler_status_details() -> dict:
-    """Compile comprehensive live status report of the 24/7 engine."""
+    """Retrieves full status of 24/7 engine including all 3 AI agents."""
     config = await get_or_create_config()
-    queries = get_queries_list(config)
-    idx = config.current_category_index % len(queries)
-    current_category = queries[idx]
-
-    # Calculate stats
     async with AsyncSessionLocal() as db:
-        # Total jobs run
-        total_jobs = (await db.execute(select(func.count()).select_from(ScrapeJob))).scalar_one()
-
-        # Leads found today
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        total_jobs = (
+            await db.execute(select(func.count(ScrapeJob.id)))
+        ).scalar_one()
         today_leads = (
             await db.execute(
-                select(func.count()).select_from(Lead).where(Lead.created_at >= today_start)
+                select(func.count(Lead.id)).where(Lead.created_at >= today_start)
             )
         ).scalar_one()
-
-    # Next run time
-    next_run = None
-    if _scheduler and _scheduler.running and config.is_enabled:
-        job = _scheduler.get_job("auto_lead_hunter")
-        if job and job.next_run_time:
-            next_run = job.next_run_time
 
     return {
         "is_enabled": config.is_enabled,
         "interval_minutes": config.interval_minutes,
-        "current_category": current_category,
-        "last_run_at": config.last_run_at,
-        "next_run_at": next_run,
-        "total_jobs_run": total_jobs,
-        "leads_found_today": today_leads,
-        "active_jobs_count": 1 if _is_job_executing else 0,
+        "agents": get_agents_status_list(),
+        "total_jobs_run": total_jobs or 0,
+        "leads_found_today": today_leads or 0,
     }

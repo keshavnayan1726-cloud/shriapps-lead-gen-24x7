@@ -71,6 +71,7 @@ class ScrapeJob(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     query = Column(String(255), nullable=False)
+    agent_name = Column(String(128), default="AI Hunter 1", nullable=True)
     status = Column(String(32), default="running", index=True)  # running, completed, failed
     leads_found = Column(Integer, default=0)
     leads_saved = Column(Integer, default=0)

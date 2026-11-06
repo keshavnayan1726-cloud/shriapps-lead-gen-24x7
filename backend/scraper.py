@@ -1,13 +1,15 @@
 """
-scraper.py — Playwright-based Google Maps scraper + Gemini AI analysis & Lead Scoring.
+scraper.py — High-Performance Playwright Google Maps Scraper + Gemini High-Thinking AI Lead Engine.
+Specifically calibrated for 'Shri Apps and Web' (Gurugram).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import google.generativeai as genai
 from playwright.async_api import async_playwright
@@ -16,16 +18,36 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini if key provided
-_gemini_available = False
-if settings.GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        _gemini_model = genai.GenerativeModel("gemini-1.5-flash")
-        _gemini_available = True
-        logger.info("Gemini AI client successfully initialized.")
-    except Exception as e:
-        logger.warning(f"Could not initialize Gemini AI: {e}")
+# --- Negative Qualification Filter ---
+# Exclude entities that will never buy web/app development from a Gurugram B2B agency
+DISQUALIFIED_KEYWORDS = [
+    # Multinational Tech & Large IT Giants
+    "tcs", "tata consultancy", "infosys", "wipro", "accenture", "cognizant", "ibm",
+    "hcl tech", "google", "microsoft", "amazon development", "deloitte", "kpmg",
+    "ey ", "ernst & young", "pwc", "american express", "genpact", "capgemini",
+    "oracle", "cisco", "intel", "adobe", "samsung r&d", "dlf corporate", "ericsson",
+    # Government, Municipal & Civic
+    "police station", "post office", "municipal corporation", "mcg", "district court",
+    "tehsil", "sub division", "patwar bhawan", "rto", "huda office", "dhbvn", "vidyut",
+    "metro station", "railway station", "bus stand", "toll plaza", "fire station",
+    # Financial Utilities & ATMs
+    "atm", "cash machine", "branch - hdfc", "branch - sbi", "branch - icici",
+    "bank of baroda", "axis bank branch", "punjab national bank", "canara bank",
+    "kotak mahindra bank branch", "indusind bank branch",
+    # Fuel, CNG & Transport
+    "petrol pump", "cng station", "hp petrol", "indian oil", "bharat petroleum",
+    "cng filling", "ev charging station",
+    # Public & Non-commercial
+    "public park", "memorial", "cemetery", "graveyard", "temple", "mandir", "masjid",
+    "church", "gurudwara", "security gate", "society gate", "residential tower",
+]
+
+DISQUALIFIED_CATEGORIES = [
+    "corporate office", "corporate campus", "software company", "it services",
+    "bank", "atm", "police department", "government office", "city government office",
+    "transit station", "subway station", "gas station", "petrol pump", "place of worship",
+    "park", "monument", "housing complex", "apartment building"
+]
 
 
 @dataclass
@@ -55,8 +77,24 @@ class EnrichedLead:
     source_query: str = ""
 
 
+def _is_disqualified(name: str, category: str) -> bool:
+    """Detects businesses that are unlikely to buy B2B web/app development."""
+    n_lower = name.lower()
+    c_lower = category.lower()
+
+    for kw in DISQUALIFIED_KEYWORDS:
+        if kw in n_lower:
+            return True
+
+    for cat in DISQUALIFIED_CATEGORIES:
+        if cat in c_lower or cat in n_lower:
+            return True
+
+    return False
+
+
 def _clean_phone(raw: str) -> str:
-    """Format and normalize Indian phone numbers to E.164 standard."""
+    """Format and normalize Indian phone numbers to E.164 (+91)."""
     if not raw:
         return ""
     cleaned = re.sub(r"[^\d+]", "", raw)
@@ -66,12 +104,58 @@ def _clean_phone(raw: str) -> str:
         cleaned = "+" + cleaned
     elif len(cleaned) == 10:
         cleaned = "+91" + cleaned
-    return cleaned
+    return cleaned if len(cleaned) >= 11 else ""
 
 
-async def scrape_google_maps(query: str, max_results: int = 15) -> list[RawBusiness]:
-    """Scrape Google Maps search results for the target location/category."""
+# --- AI Engine Client Manager ---
+_active_gemini_model = None
+_active_gemini_name = None
+
+def get_or_init_gemini(api_key: Optional[str] = None):
+    """Initializes or returns the active Gemini model instance."""
+    global _active_gemini_model, _active_gemini_name
+    key = api_key or os.getenv("GEMINI_API_KEY") or settings.GEMINI_API_KEY
+
+    if not key or key.strip() in ("", "your_gemini_api_key_here"):
+        _active_gemini_model = None
+        _active_gemini_name = None
+        return None, None
+
+    if _active_gemini_model and not api_key:
+        return _active_gemini_model, _active_gemini_name
+
+    try:
+        genai.configure(api_key=key.strip())
+        # Try latest high-thinking models in order of priority:
+        candidate_models = ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
+        for m_name in candidate_models:
+            try:
+                m = genai.GenerativeModel(m_name)
+                _active_gemini_model = m
+                _active_gemini_name = m_name
+                logger.info(f"Gemini AI successfully connected using model: {m_name}")
+                return m, m_name
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning(f"Could not configure Gemini client: {e}")
+
+    _active_gemini_model = None
+    _active_gemini_name = None
+    return None, None
+
+
+# Initialize on startup if key present
+get_or_init_gemini()
+
+
+async def scrape_google_maps(query: str, max_results: int = 35) -> list[RawBusiness]:
+    """
+    Robust Google Maps scraper using continuous feed scrolling.
+    Collects full target count (e.g. 35 businesses) with deep detail inspection.
+    """
     results: list[RawBusiness] = []
+    logger.info(f"Initiating Google Maps scrape for '{query}' (Target: {max_results} leads)...")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -81,10 +165,11 @@ async def scrape_google_maps(query: str, max_results: int = 15) -> list[RawBusin
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
+                "--disable-blink-features=AutomationControlled",
             ],
         )
         context = await browser.new_context(
-            viewport={"width": 1280, "height": 800},
+            viewport={"width": 1440, "height": 900},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -96,105 +181,189 @@ async def scrape_google_maps(query: str, max_results: int = 15) -> list[RawBusin
         maps_url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}"
         logger.info(f"Navigating to: {maps_url}")
         try:
-            await page.goto(maps_url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(2500)
+            await page.goto(maps_url, wait_until="domcontentloaded", timeout=35000)
+            await page.wait_for_timeout(3000)
         except Exception as e:
-            logger.error(f"Navigation failed for query '{query}': {e}")
+            logger.error(f"Navigation error: {e}")
             await browser.close()
             return results
 
-        # Find feed panel
-        panel_selector = '[role="feed"]'
+        # 1. Continuous feed scroll to accumulate cards
+        feed_selector = 'div[role="feed"]'
+        feed = None
         try:
-            panel = await page.wait_for_selector(panel_selector, timeout=10000)
+            feed = await page.wait_for_selector(feed_selector, timeout=10000)
         except Exception:
-            logger.warning("Could not locate results feed panel. Continuing with visible items.")
-            panel = None
+            logger.warning("Main feed selector not found. Scrolling full window.")
 
-        if panel:
-            # Scroll to load listings
-            scroll_passes = min(6, (max_results // 3) + 1)
-            for _ in range(scroll_passes):
+        # Collect unique listing entries
+        target_discovered = int(max_results * 1.6) # Discover 60% extra to allow for disqualified/no-phone filtering
+        discovered_entries: dict[str, dict] = {}
+        
+        scroll_passes = 0
+        max_scroll_passes = max(40, max_results * 2)
+        stagnant_passes = 0
+
+        while len(discovered_entries) < target_discovered and scroll_passes < max_scroll_passes:
+            scroll_passes += 1
+            prev_len = len(discovered_entries)
+
+            # Query all rendered place cards in DOM
+            card_elements = await page.query_selector_all('div.Nv2PK')
+            for card in card_elements:
                 try:
-                    await panel.evaluate("el => el.scrollBy(0, 900)")
-                    await page.wait_for_timeout(700)
+                    link_el = await card.query_selector('a.hfpxzc')
+                    if not link_el:
+                        continue
+                    href = await link_el.get_attribute("href")
+                    if not href or href in discovered_entries:
+                        continue
+
+                    # Extract card title
+                    title_el = await card.query_selector('.qBF1Pd') or await card.query_selector('div[class*="fontHeadlineSmall"]')
+                    title = (await title_el.inner_text()).strip() if title_el else ""
+                    if not title or title.lower() in ["results", "sponsored"]:
+                        continue
+
+                    # Extract rating & review counts
+                    rating_el = await card.query_selector('span.MW4etd')
+                    rating = (await rating_el.inner_text()).strip() if rating_el else ""
+
+                    reviews_el = await card.query_selector('span.UY7F9')
+                    reviews = (await reviews_el.inner_text()).strip().replace("(", "").replace(")", "") if reviews_el else ""
+
+                    # Extract category & text snippets
+                    sublines = await card.query_selector_all('div.W4Efsd')
+                    category = ""
+                    address = ""
+                    phone_on_card = ""
+
+                    for line in sublines:
+                        txt = (await line.inner_text()).strip()
+                        if not txt:
+                            continue
+                        parts = [p.strip() for p in txt.split("·") if p.strip()]
+                        if not category and parts:
+                            category = parts[0]
+                        for p in parts:
+                            cleaned_p = re.sub(r"[^\d+]", "", p)
+                            if len(cleaned_p) >= 10:
+                                phone_on_card = p
+                        if any(k in txt for k in ["Gurugram", "Gurgaon", "Sector", "Road", "Phase", "Market"]):
+                            address = txt
+
+                    # Check website button directly on card
+                    web_el = await card.query_selector('a[data-value="Website"], a[aria-label*="website"]')
+                    web_on_card = await web_el.get_attribute("href") if web_el else ""
+
+                    discovered_entries[href] = {
+                        "name": title,
+                        "category": category,
+                        "address": address,
+                        "phone": phone_on_card,
+                        "website": web_on_card,
+                        "rating": rating,
+                        "reviews_count": reviews,
+                        "href": href,
+                    }
                 except Exception:
+                    continue
+
+            logger.info(f"Scroll pass #{scroll_passes}: Discovered {len(discovered_entries)} unique businesses...")
+
+            if len(discovered_entries) == prev_len:
+                stagnant_passes += 1
+                if stagnant_passes >= 5:
+                    logger.info("End of Google Maps results feed reached.")
                     break
+            else:
+                stagnant_passes = 0
 
-        cards = await page.query_selector_all('a[href*="/maps/place/"]')
-        logger.info(f"Discovered {len(cards)} listing links on Google Maps.")
+            # Scroll feed down
+            if feed:
+                await feed.evaluate("el => el.scrollBy(0, 1600)")
+            else:
+                await page.evaluate("window.scrollBy(0, 1600)")
+            await page.wait_for_timeout(900)
 
-        seen_hrefs: set[str] = set()
-        for card in cards:
+        logger.info(f"Finished scrolling. Total unique candidates discovered: {len(discovered_entries)}")
+
+        # 2. Extract deep details (Phone & Website) in a separate page tab
+        # This prevents breaking the main feed and guarantees 0 stale element errors
+        detail_tab = await context.new_page()
+
+        for href, data in discovered_entries.items():
             if len(results) >= max_results:
                 break
-            try:
-                href = await card.get_attribute("href") or ""
-                if not href or href in seen_hrefs:
-                    continue
-                seen_hrefs.add(href)
 
-                await card.click()
-                await page.wait_for_timeout(1500)
+            name = data["name"]
+            category = data["category"]
 
-                # Extract business profile details
-                name = (
-                    await _get_text(page, 'h1[class*="DUwDvf"]')
-                    or await _get_text(page, 'h1[class*="fontHeadlineLarge"]')
-                    or "Local Business"
-                )
-                category = (
-                    await _get_text(page, 'button[jsaction*="category"]')
-                    or await _get_text(page, 'button[class*="DkEaL"]')
-                    or "Business"
-                )
-                address = (
-                    await _get_text(page, '[data-item-id="address"]')
-                    or await _get_text(page, 'button[data-item-id="address"]')
-                    or ""
-                )
-                phone_raw = (
-                    await _get_text(page, '[data-item-id*="phone"]')
-                    or await _get_text(page, 'button[data-item-id*="phone"]')
-                    or ""
-                )
-                phone = _clean_phone(phone_raw)
-
-                website = (
-                    await _get_attribute(page, '[data-item-id="authority"]', "href")
-                    or await _get_attribute(page, 'a[aria-label*="website"]', "href")
-                    or ""
-                )
-
-                rating = (
-                    await _get_text(page, 'span[class*="ceNzKf"]')
-                    or await _get_text(page, 'div[class*="F7nice"] span[aria-hidden="true"]')
-                    or ""
-                )
-
-                reviews_count = (
-                    await _get_text(page, 'span[aria-label*="reviews"]')
-                    or await _get_text(page, 'button[class*="HHrUdb"]')
-                    or ""
-                )
-
-                if name and name != "Local Business":
-                    results.append(
-                        RawBusiness(
-                            name=name,
-                            category=category,
-                            address=address,
-                            phone=phone,
-                            website=website,
-                            rating=rating,
-                            reviews_count=reviews_count,
-                        )
-                    )
-                    logger.info(f"Scraped lead: {name} | Phone: {phone} | Site: {bool(website)}")
-            except Exception as e:
-                logger.debug(f"Error inspecting business card: {e}")
+            # Filter out non-commercial entities (banks, ATMs, petrol pumps, MNC campuses)
+            if _is_disqualified(name, category):
+                logger.info(f"Filtered out unlikely buyer: {name} ({category})")
                 continue
 
+            phone = _clean_phone(data["phone"])
+            website = data["website"]
+            address = data["address"]
+
+            # If phone or website missing from card, visit place page directly
+            if not phone or not website or not address:
+                try:
+                    await detail_tab.goto(href, wait_until="domcontentloaded", timeout=12000)
+                    await detail_tab.wait_for_timeout(800)
+
+                    if not phone:
+                        phone_raw = (
+                            await _get_text(detail_tab, '[data-item-id*="phone"]')
+                            or await _get_text(detail_tab, 'button[data-item-id*="phone"]')
+                            or ""
+                        )
+                        phone = _clean_phone(phone_raw)
+
+                    if not website:
+                        website = (
+                            await _get_attribute(detail_tab, '[data-item-id="authority"]', "href")
+                            or await _get_attribute(detail_tab, 'a[aria-label*="website"]', "href")
+                            or ""
+                        )
+
+                    if not address:
+                        address = (
+                            await _get_text(detail_tab, '[data-item-id="address"]')
+                            or await _get_text(detail_tab, 'button[data-item-id="address"]')
+                            or ""
+                        )
+
+                    if not category:
+                        category = (
+                            await _get_text(detail_tab, 'button[jsaction*="category"]')
+                            or await _get_text(detail_tab, 'button[class*="DkEaL"]')
+                            or "Business"
+                        )
+                except Exception as e:
+                    logger.debug(f"Deep lookup exception for '{name}': {e}")
+
+            # Ensure phone exists for WhatsApp outreach
+            if not phone:
+                logger.info(f"Skipping lead without phone: {name}")
+                continue
+
+            results.append(
+                RawBusiness(
+                    name=name,
+                    category=category,
+                    address=address,
+                    phone=phone,
+                    website=website,
+                    rating=data["rating"],
+                    reviews_count=data["reviews_count"],
+                )
+            )
+            logger.info(f"[{len(results)}/{max_results}] Verified Qualified Lead: {name} | Phone: {phone} | Web: {bool(website)}")
+
+        await detail_tab.close()
         await browser.close()
 
     return results
@@ -221,98 +390,151 @@ async def _get_attribute(page, selector: str, attr: str) -> Optional[str]:
     return None
 
 
-def _calculate_rule_based_score(biz: RawBusiness) -> int:
-    """Smart algorithmic lead score based on digital readiness gaps."""
-    score = 60
-    if not biz.website:
-        score += 25  # High priority: no website means high need for Web development
+def _calculate_deep_qualification(biz: RawBusiness) -> Tuple[int, str, str]:
+    """
+    High-IQ Algorithmic Qualification for 'Shri Apps and Web'.
+    Evaluates business category, tech readiness gaps, and WhatsApp outreach potential.
+    Used when Gemini API key is not connected or as an instant resilient fallback.
+    """
+    cat = (biz.category or "").lower()
+    name = biz.name
+    has_web = bool(biz.website)
+
+    # 1. Propensity Score Calculation (1-100)
+    base_score = 75
+    # High-ticket sectors in Gurugram
+    if any(k in cat for k in ["restaurant", "cafe", "bistro", "bakery", "bar", "kitchen"]):
+        base_score += 15 # Severe pain: 28-30% Zomato/Swiggy commission
+        sector = "Food & Hospitality"
+    elif any(k in cat for k in ["clinic", "dental", "doctor", "hospital", "physio", "derma"]):
+        base_score += 14 # Severe pain: Lost appointment bookings, no patient portal
+        sector = "Healthcare"
+    elif any(k in cat for k in ["gym", "fitness", "yoga", "pilates", "crossfit", "spa", "salon"]):
+        base_score += 12 # Severe pain: Churn, manual membership tracking
+        sector = "Fitness & Lifestyle"
+    elif any(k in cat for k in ["jewellery", "boutique", "apparel", "designer", "retail", "interior"]):
+        base_score += 10 # Severe pain: Needs digital catalog & WhatsApp commerce
+        sector = "Luxury Retail"
+    elif any(k in cat for k in ["real estate", "property", "broker", "consultant"]):
+        base_score += 13 # Severe pain: High-ticket NRI lead capture portals
+        sector = "Real Estate"
     else:
-        score += 5  # Has website: might need mobile app or modern overhaul
+        sector = "Local Business"
 
-    if biz.phone:
-        score += 10  # Can be contacted directly on WhatsApp
+    if not has_web:
+        base_score += 10 # Urgent need: No website at all!
+    else:
+        base_score += 2  # Has website, but needs mobile app or modernization
 
-    if biz.rating:
-        try:
-            val = float(biz.rating.split()[0])
-            if val < 4.2:
-                score += 5  # Negative review turnaround / custom feedback app needed
-        except Exception:
-            pass
+    final_score = min(98, max(55, base_score))
 
-    return min(98, max(40, score))
+    # 2. Root Cause Pain Points
+    if "Food" in sector:
+        problems = (
+            f"• Paying 25-30% commission per order on Zomato/Swiggy without owning customer data\n"
+            f"• Lacks direct ordering website and branded WhatsApp re-ordering flow\n"
+            f"• Missing digital table reservation system, losing high-intent weekend traffic"
+        )
+        pitch = (
+            f"Hi! Reaching out from Shri Apps and Web in Gurugram. We noticed {name} is popular on Maps! "
+            f"Most restaurants in your area lose 28% of revenue to delivery aggregators. "
+            f"We build direct 0% commission mobile ordering apps and custom websites for premier food brands. "
+            f"Could I share a 2-minute live demo customized for {name}?"
+        )
+    elif "Healthcare" in sector:
+        problems = (
+            f"• Missing automated WhatsApp appointment booking; staff handles manual phone calls\n"
+            f"• No dedicated patient portal for digital prescriptions and follow-up reminders\n"
+            f"• Website lacks fast mobile load speeds, losing high-intent local patients"
+        )
+        pitch = (
+            f"Hello Dr. / Team at {name}! Reaching out from Shri Apps and Web, Gurugram. "
+            f"We develop automated WhatsApp appointment booking systems and modern clinic websites that eliminate patient no-shows. "
+            f"We'd love to share a 2-minute prototype built for your practice. Can we send a quick preview?"
+        )
+    elif "Fitness" in sector:
+        problems = (
+            f"• Relying on manual registers or spreadsheets for member renewals and attendance\n"
+            f"• Lacks a branded mobile app with class booking, workout tracking, and push notifications\n"
+            f"• High member churn due to lack of automated WhatsApp renewal reminders"
+        )
+        pitch = (
+            f"Hi {name} Team! We noticed your great fitness facility in Gurugram. "
+            f"At Shri Apps and Web, we build branded member mobile apps with automated membership renewal reminders and class booking. "
+            f"Would you be open to seeing a 2-minute interactive demo on how this cuts member churn?"
+        )
+    else:
+        problems = (
+            f"• Missing modern mobile-first web application to capture Gurugram digital buyers\n"
+            f"• Lacks automated WhatsApp lead capture and customer inquiry management\n"
+            f"• High reliance on third-party directories instead of owning the brand platform"
+            if not has_web
+            else f"• Existing website lacks instant WhatsApp conversion and mobile app presence\n"
+                 f"• Missing automated booking/inquiry workflows, leaking high-value leads\n"
+                 f"• Opportunity to launch branded customer portal with push notifications"
+        )
+        pitch = (
+            f"Hello! I saw {name} in Gurugram and love your brand presence. "
+            f"At Shri Apps and Web, we build high-converting custom websites and mobile apps for leading Gurugram businesses to automate customer bookings and scale revenue. "
+            f"Could I send you a 2-minute preview of what we can build for {name}?"
+        )
+
+    return final_score, problems, pitch
 
 
 async def ai_analyze_business(biz: RawBusiness, source_query: str) -> EnrichedLead:
     """
-    Leverages Gemini AI to generate:
-    1. Specific digital problems
-    2. A calibrated Lead Score (1-100)
-    3. A conversion-focused WhatsApp sales pitch for 'Shri Apps and Web'
+    Enriches a qualified business lead with Gemini High-Thinking AI or deep algorithmic fallback.
     """
-    # Default fallback content
-    rule_score = _calculate_rule_based_score(biz)
-    has_website = bool(biz.website)
-    category_label = biz.category or "business"
-
-    default_problems = (
-        f"• No dedicated mobile-first digital presence to capture high-intent Gurugram customers\n"
-        f"• Missing direct booking / order management system, leaking leads to aggregators\n"
-        f"• Lack of automated WhatsApp customer engagement and re-ordering workflow"
-        if not has_website
-        else f"• Website lacks seamless mobile conversion and instant WhatsApp booking\n"
-             f"• High commission reliance instead of direct customer ownership\n"
-             f"• Opportunity to launch branded loyalty and push notification mobile app"
-    )
-
-    default_pitch = (
-        f"Hello! I noticed {biz.name} in Gurugram and love what you're doing. "
-        f"At Shri Apps and Web, we help premier {category_label} businesses launch custom mobile apps "
-        f"and high-converting websites that drive direct bookings and save huge platform commissions. "
-        f"Could I share a 2-minute prototype we built for your business? 🚀"
-    )
-
+    rule_score, rule_problems, rule_pitch = _calculate_deep_qualification(biz)
+    
     lead_score = rule_score
-    problems = default_problems
-    pitch = default_pitch
+    problems = rule_problems
+    pitch = rule_pitch
 
-    if _gemini_available:
-        prompt = f"""You are an elite B2B sales development strategist for '{settings.COMPANY_NAME}', an agency in Gurugram specializing in custom mobile apps, web applications, and digital ordering/booking platforms.
+    gemini_model, model_name = get_or_init_gemini()
 
-Analyze this local Gurugram business:
-- Name: {biz.name}
+    if gemini_model:
+        prompt = f"""You are an elite B2B enterprise growth consultant and software architect evaluating leads in Gurugram for '{settings.COMPANY_NAME}', an agency specializing in custom mobile applications (iOS/Android), web applications, direct ordering systems, and automated WhatsApp CRM solutions.
+
+Target Business Profile:
+- Business Name: {biz.name}
 - Category: {biz.category}
 - Address: {biz.address}
-- Website: {biz.website or "None (No website found)"}
-- Rating: {biz.rating or "N/A"}
+- Website: {biz.website or "None (No website)"}
+- Rating: {biz.rating or "N/A"} ({biz.reviews_count or "0"} reviews)
 
-Provide your response in EXACTLY this format:
+Conduct a sharp, high-thinking B2B commercial evaluation:
+1. SCORE (1-100): Calibrate their propensity to buy custom web/app development (₹30,000 - ₹1,50,000).
+   - Rate 85-98 for high-ticket local businesses (independent restaurants, clinics, gyms, salons, luxury boutiques) lacking direct apps or websites.
+   - Rate 70-84 for businesses with basic sites needing modernization or native apps.
+2. PROBLEMS: List exactly 3 concrete, non-generic business bottlenecks and revenue leaks.
+3. PITCH: A high-converting WhatsApp message under 100 words. Address '{biz.name}', introduce '{settings.COMPANY_NAME}', highlight the specific solution, and offer a frictionless 2-minute prototype preview.
 
-SCORE: <An integer between 1 and 100 representing how urgently they need app/web development. Rate 85-98 if no website or outdated presence. Rate 70-84 if they have a website but need a mobile app/ordering system.>
-
+Output EXACTLY this format:
+SCORE: <integer 1-100>
 PROBLEMS:
-<2-3 concise bullet points identifying their digital blindspots, lost revenue, and tech bottlenecks>
-
+<3 bullet points>
 PITCH:
-<A friendly, punchy, WhatsApp-ready message under 120 words. Greet them warmly, mention their business name '{biz.name}', introduce '{settings.COMPANY_NAME}', address their exact problem, and propose a quick demo or prototype.>
+<WhatsApp message>
 """
         try:
-            response = await asyncio.to_thread(_gemini_model.generate_content, prompt)
+            response = await asyncio.to_thread(gemini_model.generate_content, prompt)
             text = response.text.strip()
 
             if "SCORE:" in text and "PROBLEMS:" in text and "PITCH:" in text:
-                score_part = text.split("SCORE:")[1].split("PROBLEMS:")[0].strip()
-                probs_part = text.split("PROBLEMS:")[1].split("PITCH:")[0].strip()
-                pitch_part = text.split("PITCH:")[1].strip()
+                score_str = text.split("SCORE:")[1].split("PROBLEMS:")[0].strip()
+                probs_str = text.split("PROBLEMS:")[1].split("PITCH:")[0].strip()
+                pitch_str = text.split("PITCH:")[1].strip()
 
-                # Parse score safely
-                nums = re.findall(r"\d+", score_part)
+                nums = re.findall(r"\d+", score_str)
                 if nums:
-                    lead_score = max(35, min(99, int(nums[0])))
-                problems = probs_part
-                pitch = pitch_part
+                    lead_score = max(40, min(99, int(nums[0])))
+                problems = probs_str
+                pitch = pitch_str
+                logger.info(f"AI enrichment completed via {model_name} for '{biz.name}' (Score: {lead_score})")
         except Exception as e:
-            logger.warning(f"Gemini API enrichment error for '{biz.name}': {e}. Using intelligent fallback.")
+            logger.warning(f"Gemini API call failed for '{biz.name}' ({e}). Utilizing deep algorithmic qualification.")
 
     return EnrichedLead(
         business_name=biz.name,
@@ -331,14 +553,14 @@ PITCH:
 
 
 async def run_scrape_pipeline(
-    query: str, max_results: int = 15
+    query: str, max_results: int = 35
 ) -> list[EnrichedLead]:
-    """Execute complete workflow: Web scraping -> AI analysis & scoring."""
+    """Execute complete workflow: Continuous Maps scraping -> High-Thinking AI enrichment."""
     raw_businesses = await scrape_google_maps(query, max_results)
-    logger.info(f"Starting AI enrichment for {len(raw_businesses)} businesses...")
+    logger.info(f"Scraped {len(raw_businesses)} qualified businesses. Starting enrichment pipeline...")
 
     leads: list[EnrichedLead] = []
-    # Process in batches of 4 to respect API quotas
+    # Process in concurrent batches of 4
     batch_size = 4
     for i in range(0, len(raw_businesses), batch_size):
         batch = raw_businesses[i : i + batch_size]
@@ -347,6 +569,6 @@ async def run_scrape_pipeline(
         )
         leads.extend(enriched)
         if i + batch_size < len(raw_businesses):
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
 
     return leads

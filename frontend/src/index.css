@@ -6,7 +6,7 @@
 }
 
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  @apply bg-slate-50 text-slate-800 antialiased;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
@@ -25,18 +25,18 @@ body {
   animation: fadeIn 0.2s ease-out forwards;
 }
 
-/* Custom scrollbar for mobile responsiveness */
+/* Custom subtle scrollbar for clean light mode */
 ::-webkit-scrollbar {
   width: 5px;
   height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #020617;
+  background: #f8fafc;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #cbd5e1;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #94a3b8;
 }

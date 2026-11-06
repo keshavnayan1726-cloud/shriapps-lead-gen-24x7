@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 
 export interface WsMessage {
   type: string
-  data: any
+  data?: any
+  [key: string]: any
 }
 
 export function useWebSocket() {

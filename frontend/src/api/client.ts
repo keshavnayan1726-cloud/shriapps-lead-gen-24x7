@@ -1,7 +1,8 @@
-// src/api/client.ts
+// src/api/client.ts — Zero-Friction Auto-Connecting Client with 3x AI Hunter & AI Config APIs.
 import axios from 'axios'
 
 const STORAGE_KEY = 'shri_apps_api_base_url'
+export const CURRENT_LAN_IP = '10.83.139.190'
 
 // Dynamic host detection + localStorage override for connecting from any network
 export const getApiBaseUrl = (): string => {
@@ -9,6 +10,11 @@ export const getApiBaseUrl = (): string => {
     const custom = localStorage.getItem(STORAGE_KEY)
     if (custom && custom.trim()) {
       return custom.trim().replace(/\/+$/, '')
+    }
+
+    // If loaded directly from FastAPI unified port (e.g. :8000 or custom cloud domain)
+    if (window.location.port === '8000' || window.location.protocol === 'https:') {
+      return window.location.origin
     }
   }
 
@@ -25,10 +31,10 @@ export const getApiBaseUrl = (): string => {
 
   // Inside mobile APK or when hostname is localhost, use the PC's Wi-Fi IP
   if (isCapacitor || hostname === 'localhost' || hostname === '127.0.0.1') {
-    return 'http://10.90.225.190:8000'
+    return `http://${CURRENT_LAN_IP}:8000`
   }
 
-  return `http://${hostname || '10.90.225.190'}:8000`
+  return `http://${hostname || CURRENT_LAN_IP}:8000`
 }
 
 export const setApiBaseUrl = (url: string): void => {
@@ -46,7 +52,7 @@ export const setApiBaseUrl = (url: string): void => {
 export const apiClient = axios.create({
   baseURL: getApiBaseUrl(),
   headers: { 'Content-Type': 'application/json' },
-  timeout: 12000,
+  timeout: 15000,
 })
 
 // Keep baseURL in sync before requests
@@ -54,6 +60,37 @@ apiClient.interceptors.request.use((config) => {
   config.baseURL = getApiBaseUrl()
   return config
 })
+
+// ── AUTOMATIC ZERO-TOUCH DISCOVERY ──────────────────────────────────
+export const autoDiscoverBackend = async (): Promise<string> => {
+  if (typeof window === 'undefined') return getApiBaseUrl()
+
+  const current = getApiBaseUrl()
+  const candidates = [
+    current,
+    window.location.origin,
+    `http://${window.location.hostname}:8000`,
+    `http://${CURRENT_LAN_IP}:8000`,
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+  ]
+  const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)))
+
+  for (const url of uniqueCandidates) {
+    try {
+      const clean = url.replace(/\/+$/, '')
+      const res = await axios.get(`${clean}/api/health`, { timeout: 1800 })
+      if (res.status === 200) {
+        setApiBaseUrl(clean)
+        return clean
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return current
+}
 
 export type LeadStatus = 'new' | 'contacted' | 'interested' | 'closed' | 'rejected'
 
@@ -99,6 +136,7 @@ export interface Stats {
 export interface ScrapeJob {
   id: number
   query: string
+  agent_name?: string
   status: 'running' | 'completed' | 'failed'
   leads_found: number
   leads_saved: number
@@ -115,15 +153,24 @@ export interface ActivityLog {
   created_at: string
 }
 
+export interface AgentStatus {
+  id: number
+  name: string
+  specialty: string
+  badge: string
+  description: string
+  is_active: boolean
+  is_running: boolean
+  current_target: string
+  leads_found: number
+}
+
 export interface SchedulerStatus {
   is_enabled: boolean
   interval_minutes: number
-  current_category: string
-  last_run_at: string | null
-  next_run_at: string | null
+  agents: AgentStatus[]
   total_jobs_run: number
   leads_found_today: number
-  active_jobs_count: number
 }
 
 export interface AnalyticsData {
@@ -136,8 +183,17 @@ export interface AnalyticsData {
 }
 
 export interface ScrapeRequest {
-  query: string
+  query?: string
   max_results: number
+  agent_id?: number
+  run_all_agents?: boolean
+}
+
+export interface AiStatus {
+  connected: boolean
+  model: string
+  provider: string
+  has_api_key: boolean
 }
 
 // ── API FUNCTIONS ───────────────────────────────────────────────────
@@ -173,7 +229,23 @@ export const deleteLead = (id: number) =>
   apiClient.delete(`/api/leads/${id}`)
 
 export const triggerScrape = (payload: ScrapeRequest) =>
-  apiClient.post<{ job_id: number; query: string; message: string }>('/api/scrape/trigger', payload).then((r) => r.data)
+  apiClient
+    .post<{ job_id: number; query: string; message: string; agent_name?: string }>(
+      '/api/scrape/trigger',
+      payload
+    )
+    .then((r) => r.data)
+
+export const triggerTripleAiFleet = (maxResults = 36) =>
+  apiClient
+    .post<{ job_id: number; query: string; message: string; agent_name?: string }>(
+      '/api/scrape/trigger',
+      { run_all_agents: true, max_results: maxResults }
+    )
+    .then((r) => r.data)
+
+export const fetchAgents = () =>
+  apiClient.get<AgentStatus[]>('/api/agents').then((r) => r.data)
 
 export const fetchScrapeJobs = (limit = 15) =>
   apiClient.get<ScrapeJob[]>('/api/scrape/jobs', { params: { limit } }).then((r) => r.data)
@@ -190,6 +262,20 @@ export const toggleScheduler = () =>
 export const updateSchedulerConfig = (config: { interval_minutes?: number; custom_queries?: string }) =>
   apiClient.post('/api/scheduler/config', config).then((r) => r.data)
 
+// ── AI CONFIG & BRAIN APIS ──
+export const fetchAiStatus = () =>
+  apiClient.get<AiStatus>('/api/ai/status').then((r) => r.data)
+
+export const updateAiConfig = (payload: { api_key: string; model?: string }) =>
+  apiClient
+    .post<{ status: string; message: string; model: string }>('/api/ai/config', payload)
+    .then((r) => r.data)
+
+export const testAiConnection = () =>
+  apiClient
+    .post<{ success: boolean; message: string; model?: string; mode: string }>('/api/ai/test')
+    .then((r) => r.data)
+
 export const exportLeadsCsvUrl = (params?: { status?: string; search?: string; min_score?: number }) => {
   const base = getApiBaseUrl()
   const query = new URLSearchParams()
@@ -199,11 +285,13 @@ export const exportLeadsCsvUrl = (params?: { status?: string; search?: string; m
   return `${base}/api/leads/export/csv?${query.toString()}`
 }
 
-export const testConnection = async (targetUrl?: string): Promise<{ success: boolean; latency: number; error?: string }> => {
-  const url = (targetUrl && targetUrl.trim()) ? targetUrl.trim().replace(/\/+$/, '') : getApiBaseUrl()
+export const testConnection = async (
+  targetUrl?: string
+): Promise<{ success: boolean; latency: number; error?: string }> => {
+  const url = targetUrl && targetUrl.trim() ? targetUrl.trim().replace(/\/+$/, '') : getApiBaseUrl()
   const start = Date.now()
   try {
-    const res = await axios.get(`${url}/api/health`, { timeout: 6000 })
+    const res = await axios.get(`${url}/api/health`, { timeout: 5000 })
     if (res.status === 200) {
       return { success: true, latency: Date.now() - start }
     }

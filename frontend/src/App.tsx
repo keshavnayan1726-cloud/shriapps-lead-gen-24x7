@@ -1,15 +1,15 @@
-// src/App.tsx
+// src/App.tsx — Clean, Simple Light-Mode UI with 100% Automated Zero-Touch Connectivity
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
-  Users, BarChart3, Bot, Activity,
-  Search, Filter, Download, Wifi, WifiOff,
-  Flame, Loader2, Sparkles, MessageSquarePlus, ChevronLeft, ChevronRight,
-  Settings
+  Users, BarChart3, Activity,
+  Search, Download, Wifi, WifiOff,
+  Flame, Sparkles, MessageSquarePlus, ChevronLeft, ChevronRight,
+  Settings, Zap, RefreshCw
 } from 'lucide-react'
 import {
   fetchLeads, fetchStats, fetchAnalytics,
   fetchSchedulerStatus, toggleScheduler, exportLeadsCsvUrl,
-  getApiBaseUrl
+  getApiBaseUrl, autoDiscoverBackend, triggerTripleAiFleet
 } from './api/client'
 import type { Lead, LeadStatus, Stats, AnalyticsData, SchedulerStatus } from './api/client'
 import LeadCard from './components/LeadCard'
@@ -55,7 +55,7 @@ export default function App() {
 
   // UI state
   const [loading, setLoading] = useState(false)
-  const [statsLoading, setStatsLoading] = useState(false)
+  const [_statsLoading, setStatsLoading] = useState(false)
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [showScrapeModal, setShowScrapeModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
@@ -89,7 +89,23 @@ export default function App() {
       setLeads(data.items)
       setTotal(data.total)
     } catch {
-      setError(`Cannot connect to ${getApiBaseUrl()}. Check server or tap ⚙️ Settings.`)
+      // Auto-Discovery Fallback: try candidate hosts automatically
+      try {
+        await autoDiscoverBackend()
+        const retryData = await fetchLeads({
+          page,
+          page_size: PAGE_SIZE,
+          status: statusFilter || undefined,
+          search: debouncedSearch || undefined,
+          min_score: hotLeadsOnly ? 80 : undefined,
+          sort_by: sortBy,
+        })
+        setLeads(retryData.items)
+        setTotal(retryData.total)
+        setError('')
+      } catch {
+        setError(`Connecting to server at ${getApiBaseUrl()}... Tap ⚙️ Settings if on a different network.`)
+      }
     } finally {
       setLoading(false)
     }
@@ -107,337 +123,404 @@ export default function App() {
       setStats(st)
       setAnalytics(an)
       setSchedulerStatus(sc)
-    } catch (e) {
-      console.warn('Overview fetch error:', e)
+    } catch {
+      // Silent catch
     } finally {
       setStatsLoading(false)
       setAnalyticsLoading(false)
     }
   }, [])
 
+  // Initial load
   useEffect(() => {
     loadLeadsData()
-  }, [loadLeadsData])
-
-  useEffect(() => {
     loadOverviewData()
+  }, [loadLeadsData, loadOverviewData])
+
+  // Periodic overview refresh
+  useEffect(() => {
+    const timer = setInterval(() => {
+      loadOverviewData()
+    }, 12000)
+    return () => clearInterval(timer)
   }, [loadOverviewData])
 
-  // Handle incoming real-time WebSocket notifications
+  // Live WebSocket message handler
   useEffect(() => {
     if (!lastMessage) return
 
-    if (lastMessage.type === 'SCRAPE_COMPLETED') {
-      const data = lastMessage.data
-      setToastMessage(`⚡ 24/7 AI found +${data.leads_saved} new leads for "${data.query}"!`)
+    if (lastMessage.type === 'NEW_LEAD') {
+      const newLead = lastMessage.lead as Lead
+      setToastMessage(`🔥 New Lead: ${newLead.business_name} (${newLead.lead_score}/100)`)
+      setTimeout(() => setToastMessage(null), 4500)
       loadLeadsData()
       loadOverviewData()
-      setTimeout(() => setToastMessage(null), 5000)
-    } else if (lastMessage.type === 'SCRAPE_STARTED') {
-      setToastMessage(`🤖 24/7 AI started scanning "${lastMessage.data.query}"…`)
+    } else if (lastMessage.type === 'AGENT_COMPLETED' || lastMessage.type === 'SCRAPE_COMPLETED') {
+      setToastMessage(`✅ ${lastMessage.agent_name || 'AI Hunter'}: +${lastMessage.leads_saved || 0} Leads Added!`)
+      setTimeout(() => setToastMessage(null), 4500)
+      loadLeadsData()
       loadOverviewData()
-      setTimeout(() => setToastMessage(null), 4000)
-    } else if (lastMessage.type === 'SCHEDULER_STATUS') {
+    } else if (lastMessage.type === 'AGENT_STARTED' || lastMessage.type === 'SCRAPE_STARTED') {
+      setToastMessage(`🤖 ${lastMessage.agent_name || 'AI'}: Searching ${lastMessage.query}...`)
+      setTimeout(() => setToastMessage(null), 3500)
+      loadOverviewData()
+    } else if (lastMessage.type === 'SCHEDULER_TOGGLED') {
       loadOverviewData()
     }
   }, [lastMessage, loadLeadsData, loadOverviewData])
 
-  async function handleToggleScheduler() {
-    await toggleScheduler()
-    await loadOverviewData()
-  }
-
-  function handleLeadUpdated(updated: Lead) {
+  const handleUpdateLead = (updated: Lead) => {
     setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)))
     loadOverviewData()
   }
 
-  function handleLeadDeleted(id: number) {
+  const handleDeleteLead = (id: number) => {
     setLeads((prev) => prev.filter((l) => l.id !== id))
-    setTotal((t) => t - 1)
+    setTotal((prev) => Math.max(0, prev - 1))
     loadOverviewData()
   }
 
-  const totalPages = Math.ceil(total / PAGE_SIZE)
-  const isBusy = (schedulerStatus?.active_jobs_count ?? 0) > 0
+  const handleToggleScheduler = async () => {
+    const res = await toggleScheduler()
+    setSchedulerStatus((prev) =>
+      prev ? { ...prev, is_enabled: res.is_enabled } : null
+    )
+    setToastMessage(res.message)
+    setTimeout(() => setToastMessage(null), 3000)
+  }
+
+  const handleTripleFleetDeploy = async () => {
+    try {
+      const res = await triggerTripleAiFleet(36)
+      setToastMessage(res.message)
+      setTimeout(() => setToastMessage(null), 4000)
+      loadOverviewData()
+    } catch {
+      setShowScrapeModal(true)
+    }
+  }
+
+  const totalPages = Math.ceil(total / PAGE_SIZE) || 1
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans pb-24 select-none sm:select-auto">
-      {/* ── Real-Time Notification Toast ── */}
-      {toastMessage && (
-        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md bg-gradient-to-r from-sky-600 to-indigo-600 text-white text-xs font-bold px-4 py-3 rounded-2xl shadow-2xl flex items-center justify-between gap-2 border border-sky-400/40 animate-bounce">
-          <div className="flex items-center gap-2 truncate">
-            <Sparkles size={16} className="text-amber-300 shrink-0" />
-            <span className="truncate">{toastMessage}</span>
-          </div>
-          <button onClick={() => setToastMessage(null)} className="text-sky-200 hover:text-white shrink-0 text-sm font-bold">
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* ── Fixed Top Header ── */}
-      <header className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur-xl border-b border-slate-800 px-4 py-3">
-        <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
-          {/* Logo & Brand */}
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="text-xl">🚀</span>
-              <h1 className="font-black text-base sm:text-lg tracking-tight text-white truncate">
-                Shri Apps and Web
-              </h1>
-              <span className="text-[10px] font-extrabold uppercase tracking-wider bg-sky-950 border border-sky-800 text-sky-300 px-2 py-0.5 rounded-md hidden xs:inline">
-                Gurugram 24/7
-              </span>
+    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans pb-24 md:pb-12">
+      {/* ── TOP HEADER (Clean White Light Theme) ── */}
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs px-4 py-3">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
+          {/* Logo & Brand Profile */}
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-sky-500 flex items-center justify-center text-white shadow-sm font-black text-sm">
+              SA
             </div>
-            <p className="text-[11px] text-slate-400 truncate">
-              Autonomous B2B Lead Generator & Outreach Pipeline
-            </p>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <h1 className="font-bold text-sm sm:text-base text-slate-900 tracking-tight">
+                  Shri Apps and Web
+                </h1>
+                <span className="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-indigo-200">
+                  Gurugram B2B
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 hidden sm:block">
+                Autonomous 24/7 AI Lead Generation & WhatsApp Outreach
+              </p>
+            </div>
           </div>
 
-          {/* Real-time Status Badges & Quick Actions */}
+          {/* Top Actions & Network Status */}
           <div className="flex items-center gap-2">
-            {/* WS Status */}
-            <span
-              title={isConnected ? 'Live WebSocket Connected' : 'Connecting to Server…'}
-              className="flex items-center gap-1 text-xs"
-            >
-              {isConnected ? (
-                <Wifi size={17} className="text-emerald-400" />
-              ) : (
-                <WifiOff size={17} className="text-rose-400" />
-              )}
-            </span>
-
-            {/* Scraping spinner */}
-            {isBusy && (
-              <span className="flex items-center gap-1 text-[11px] font-bold text-amber-400 bg-amber-950/80 px-2.5 py-1 rounded-xl border border-amber-800/80 animate-pulse">
-                <Loader2 size={12} className="animate-spin" />
-                <span className="hidden sm:inline">Hunting…</span>
-              </span>
-            )}
-
-            {/* Export CSV Button */}
-            <a
-              href={exportLeadsCsvUrl({
-                status: statusFilter || undefined,
-                search: debouncedSearch || undefined,
-                min_score: hotLeadsOnly ? 80 : undefined,
-              })}
-              download
-              title="Download Leads CSV"
-              className="flex items-center gap-1 bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-semibold px-2.5 py-2 rounded-xl border border-slate-700 transition-colors"
-            >
-              <Download size={14} className="text-emerald-400" />
-              <span className="hidden sm:inline">Export</span>
-            </a>
-
-            {/* Settings Button (⚙️) */}
+            {/* Deploy 3x AI Button */}
             <button
-              onClick={() => setShowSettingsModal(true)}
-              title="Network & Server Settings"
-              className="p-2 bg-slate-800 hover:bg-slate-750 active:scale-95 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition-colors"
+              onClick={handleTripleFleetDeploy}
+              className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold px-3 py-1.5 rounded-xl shadow-xs transition-all flex items-center gap-1.5"
+              title="Launch all 3 AI Hunters simultaneously"
             >
-              <Settings size={15} />
+              <Zap size={13} className="text-amber-300 fill-amber-300" />
+              <span className="hidden sm:inline">Deploy 3x AI</span>
+              <span className="sm:hidden">3x AI</span>
             </button>
 
-            {/* Manual Trigger Button */}
+            {/* Manual Scrape Modal */}
             <button
               onClick={() => setShowScrapeModal(true)}
-              className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 active:scale-95 text-white text-xs font-bold px-3 py-2 rounded-xl shadow-md shadow-sky-950/30 transition-all"
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium px-3 py-1.5 rounded-xl border border-slate-200 transition-all flex items-center gap-1.5"
             >
-              <MessageSquarePlus size={14} />
-              <span className="hidden xs:inline">Hunt Sector</span>
+              <MessageSquarePlus size={13} />
+              <span className="hidden md:inline">Custom Scrape</span>
+            </button>
+
+            {/* Live Connection Pill */}
+            <div
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-medium border ${
+                isConnected
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-amber-50 text-amber-700 border-amber-200'
+              }`}
+              title={isConnected ? 'Live WebSocket Connected' : 'Connecting to live push...'}
+            >
+              {isConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
+              <span className="hidden sm:inline">{isConnected ? 'Live' : 'Syncing'}</span>
+            </div>
+
+            {/* Settings (⚙️) */}
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              title="App & AI Settings"
+              className="p-1.5 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 rounded-xl border border-slate-200 transition-colors"
+            >
+              <Settings size={16} />
             </button>
           </div>
         </div>
       </header>
 
-      {/* ── Main Workspace Body ── */}
-      <main className="max-w-4xl mx-auto px-4 py-4 flex-1 w-full">
-        {/* Live 24/7 Autonomous Hunter Status Banner with Prominent Pause Button */}
+      {/* ── TOAST NOTIFICATIONS ── */}
+      {toastMessage && (
+        <div className="fixed top-16 right-4 z-50 animate-bounce">
+          <div className="bg-indigo-600 text-white text-xs font-semibold px-4 py-2.5 rounded-2xl shadow-lg border border-indigo-500 flex items-center gap-2">
+            <Sparkles size={14} className="text-amber-300" />
+            <span>{toastMessage}</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── MAIN CONTENT CONTAINER ── */}
+      <main className="max-w-6xl mx-auto w-full px-4 pt-4 flex-1">
+        {/* Connection Error / Fallback Alert */}
+        {error && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl p-3 text-xs flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex items-center gap-2">
+              <RefreshCw size={14} className="animate-spin text-amber-600 shrink-0" />
+              <span>{error}</span>
+            </div>
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              className="bg-white text-amber-800 text-[11px] font-bold px-2.5 py-1 rounded-lg border border-amber-300 shrink-0"
+            >
+              Settings ⚙️
+            </button>
+          </div>
+        )}
+
+        {/* 24/7 AI Hunter Banner with Instant Controls */}
         <LiveHunterBanner
           scheduler={schedulerStatus}
-          loading={statsLoading}
+          loading={loading}
           onToggle={handleToggleScheduler}
           onManualTrigger={() => setShowScrapeModal(true)}
+          onTripleFleetTrigger={handleTripleFleetDeploy}
         />
 
-        {/* Global Stats Grid Bar */}
+        {/* Stats Summary Bar */}
         <StatsBar
           stats={stats}
-          loading={statsLoading}
+          loading={loading}
           onFilterHotLeads={() => {
-            setCurrentTab('leads')
-            setHotLeadsOnly((prev) => !prev)
+            setHotLeadsOnly(!hotLeadsOnly)
             setPage(1)
           }}
         />
 
-        {/* Error Alert Banner */}
-        {error && (
-          <div className="bg-rose-950/70 border border-rose-800 rounded-2xl p-3.5 text-xs text-rose-300 mb-4 flex items-center justify-between shadow-lg">
-            <span>{error}</span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowSettingsModal(true)}
-                className="bg-rose-900/60 hover:bg-rose-800 text-white font-bold px-2.5 py-1 rounded-lg text-xs"
-              >
-                Change URL
-              </button>
-              <button onClick={loadLeadsData} className="underline font-bold text-rose-200">
-                Retry
-              </button>
-            </div>
-          </div>
-        )}
+        {/* ── TAB NAVIGATION (Desktop & Tablet) ── */}
+        <div className="flex items-center justify-between mb-4 border-b border-slate-200 pb-2 flex-wrap gap-2">
+          <nav className="flex items-center gap-1">
+            <button
+              onClick={() => setCurrentTab('leads')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                currentTab === 'leads'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Users size={14} />
+              <span>Leads Pipeline</span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                currentTab === 'leads' ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-700'
+              }`}>
+                {total}
+              </span>
+            </button>
 
-        {/* ── TAB CONTENT ── */}
+            <button
+              onClick={() => setCurrentTab('scheduler')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                currentTab === 'scheduler'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Zap size={14} className={currentTab === 'scheduler' ? 'fill-amber-300 text-amber-300' : 'text-amber-500'} />
+              <span>3x AI Fleet</span>
+            </button>
+
+            <button
+              onClick={() => setCurrentTab('analytics')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                currentTab === 'analytics'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <BarChart3 size={14} />
+              <span>Analytics</span>
+            </button>
+
+            <button
+              onClick={() => setCurrentTab('activity')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                currentTab === 'activity'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Activity size={14} />
+              <span>Audit Log</span>
+            </button>
+          </nav>
+
+          {/* CSV Export Button */}
+          {currentTab === 'leads' && (
+            <a
+              href={exportLeadsCsvUrl({
+                status: statusFilter,
+                search: debouncedSearch,
+                min_score: hotLeadsOnly ? 80 : undefined,
+              })}
+              download
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl shadow-xs transition-colors"
+            >
+              <Download size={13} />
+              <span>Export CSV</span>
+            </a>
+          )}
+        </div>
+
+        {/* ── TAB 1: LEADS FEED ── */}
         {currentTab === 'leads' && (
-          <div className="space-y-3">
-            {/* Search, Filter & Sorting Bar */}
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-3.5 shadow-sm space-y-3">
-              <div className="flex gap-2">
-                {/* Search input */}
-                <div className="flex-1 relative">
-                  <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+          <div className="space-y-4">
+            {/* Filter & Search Bar */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-xs space-y-2.5">
+              <div className="flex flex-col sm:flex-row gap-2">
+                {/* Search Input */}
+                <div className="relative flex-1">
+                  <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
                   <input
+                    type="text"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search Gurugram businesses, categories, phone…"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                    placeholder="Search Gurugram businesses, sectors, categories..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
-                  {search && (
-                    <button
-                      onClick={() => setSearch('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-white"
-                    >
-                      ✕
-                    </button>
-                  )}
                 </div>
 
-                {/* Status dropdown */}
-                <div className="relative shrink-0">
-                  <Filter size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => {
-                      setStatusFilter(e.target.value as LeadStatus | '')
-                      setPage(1)
-                    }}
-                    className="bg-slate-950 border border-slate-800 rounded-2xl pl-7 pr-3 py-2.5 text-xs text-slate-300 focus:outline-none focus:ring-1 focus:ring-sky-500"
-                  >
-                    {STATUS_FILTERS.map((f) => (
-                      <option key={f.value} value={f.value}>
-                        {f.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Toggles & Sort */}
-              <div className="flex items-center justify-between gap-2 flex-wrap text-xs pt-1.5 border-t border-slate-800">
-                {/* Hot Leads Only Pill */}
+                {/* Hot Leads Only Toggle */}
                 <button
                   onClick={() => {
-                    setHotLeadsOnly((prev) => !prev)
+                    setHotLeadsOnly(!hotLeadsOnly)
                     setPage(1)
                   }}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-all ${
+                  className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border shrink-0 ${
                     hotLeadsOnly
-                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-950/40'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                      ? 'bg-amber-100 text-amber-900 border-amber-300'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                   }`}
                 >
-                  <Flame size={13} className={hotLeadsOnly ? 'fill-slate-950' : 'text-amber-400'} />
-                  <span>🔥 Hot Leads Only (80%+)</span>
+                  <Flame size={13} className={hotLeadsOnly ? 'fill-amber-600 text-amber-600' : 'text-slate-400'} />
+                  <span>🔥 Hot Leads (80%+)</span>
                 </button>
 
-                {/* Sort dropdown */}
-                <div className="flex items-center gap-1.5 ml-auto text-slate-400">
-                  <span className="text-[11px]">Sort:</span>
-                  <select
-                    value={sortBy}
-                    onChange={(e) => {
-                      setSortBy(e.target.value as any)
+                {/* Sort Order */}
+                <select
+                  value={sortBy}
+                  onChange={(e) => {
+                    setSortBy(e.target.value as any)
+                    setPage(1)
+                  }}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="score_desc">Highest AI Score</option>
+                  <option value="score_asc">Lowest AI Score</option>
+                  <option value="newest">Newest Scraped</option>
+                  <option value="oldest">Oldest Scraped</option>
+                </select>
+              </div>
+
+              {/* Status Horizontal Pill Filters */}
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1">
+                {STATUS_FILTERS.map((f) => (
+                  <button
+                    key={f.value}
+                    onClick={() => {
+                      setStatusFilter(f.value)
                       setPage(1)
                     }}
-                    className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1 text-xs text-slate-300 focus:outline-none"
+                    className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-all shrink-0 border ${
+                      statusFilter === f.value
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
                   >
-                    <option value="score_desc">Highest AI Score</option>
-                    <option value="score_asc">Lowest AI Score</option>
-                    <option value="newest">Newest Scraped</option>
-                    <option value="oldest">Oldest First</option>
-                  </select>
-                </div>
+                    {f.label}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {/* Leads List Feed */}
-            {loading ? (
-              <div className="flex flex-col items-center justify-center py-20 text-slate-500 gap-2">
-                <Loader2 size={32} className="animate-spin text-sky-500" />
-                <span className="text-xs">Loading prospects pipeline…</span>
+            {/* Leads List Grid */}
+            {loading && leads.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-slate-400 gap-3">
+                <RefreshCw size={24} className="animate-spin text-indigo-600" />
+                <span className="text-xs font-medium">Loading Gurugram business leads…</span>
               </div>
             ) : leads.length === 0 ? (
-              <div className="text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl p-6">
-                <div className="w-14 h-14 bg-slate-800 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-3">
-                  📭
+              <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center shadow-xs">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-3">
+                  <Users size={22} />
                 </div>
-                <h3 className="font-bold text-base text-white">No prospects found</h3>
-                <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                  {search || statusFilter || hotLeadsOnly
-                    ? 'No leads match your current search or filters. Try resetting filters.'
-                    : 'The 24/7 engine will continuously add leads. You can also trigger a manual scan right now.'}
+                <h4 className="font-bold text-sm text-slate-800">No leads match your filter</h4>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
+                  Deploy the 3x AI Hunters to scrape fresh qualified businesses across Gurugram.
                 </p>
                 <button
-                  onClick={() => setShowScrapeModal(true)}
-                  className="mt-4 bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all shadow-md"
+                  onClick={handleTripleFleetDeploy}
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-4 py-2 rounded-xl shadow-xs transition-all"
                 >
-                  Scan Gurugram Sectors Now
+                  Deploy 3x AI Fleet Now
                 </button>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                 {leads.map((lead) => (
                   <LeadCard
                     key={lead.id}
                     lead={lead}
-                    onUpdate={handleLeadUpdated}
-                    onDelete={handleLeadDeleted}
+                    onUpdate={handleUpdateLead}
+                    onDelete={handleDeleteLead}
                   />
                 ))}
               </div>
             )}
 
-            {/* Pagination Controls */}
+            {/* Pagination Bar */}
             {totalPages > 1 && (
-              <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl px-4 py-3 mt-4 text-xs">
-                <span className="text-slate-400">
-                  Showing <strong className="text-white">{(page - 1) * PAGE_SIZE + 1}</strong> –{' '}
-                  <strong className="text-white">{Math.min(page * PAGE_SIZE, total)}</strong> of{' '}
-                  <strong className="text-white">{total}</strong> prospects
+              <div className="flex items-center justify-between bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-600 shadow-xs">
+                <span>
+                  Page <strong>{page}</strong> of <strong>{totalPages}</strong> ({total} leads)
                 </span>
-
-                <div className="flex items-center gap-1.5">
+                <div className="flex gap-1.5">
                   <button
+                    disabled={page <= 1}
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                    className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-slate-300 transition-colors"
+                    className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 disabled:opacity-40 hover:bg-slate-100"
                   >
-                    <ChevronLeft size={16} />
+                    <ChevronLeft size={14} />
                   </button>
-                  <span className="font-mono text-slate-200 px-2 font-semibold">
-                    {page} / {totalPages}
-                  </span>
                   <button
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={page === totalPages}
-                    className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-slate-300 transition-colors"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((p) => p + 1)}
+                    className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 disabled:opacity-40 hover:bg-slate-100"
                   >
-                    <ChevronRight size={16} />
+                    <ChevronRight size={14} />
                   </button>
                 </div>
               </div>
@@ -445,76 +528,62 @@ export default function App() {
           </div>
         )}
 
+        {/* ── TAB 2: 3x AI FLEET / 24x7 ENGINE ── */}
+        {currentTab === 'scheduler' && <SchedulerView />}
+
+        {/* ── TAB 3: REAL-TIME ANALYTICS ── */}
         {currentTab === 'analytics' && (
           <AnalyticsView analytics={analytics} loading={analyticsLoading} />
         )}
 
-        {currentTab === 'scheduler' && <SchedulerView />}
-
+        {/* ── TAB 4: AUDIT STREAM ── */}
         {currentTab === 'activity' && <ActivityView />}
       </main>
 
-      {/* ── Mobile-First Bottom Navigation Bar ── */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-xl border-t border-slate-800 px-3 py-2">
-        <div className="max-w-md mx-auto grid grid-cols-4 gap-1">
-          {/* Tab 1: Leads */}
-          <button
-            onClick={() => setCurrentTab('leads')}
-            className={`flex flex-col items-center gap-1 py-1.5 rounded-xl transition-all ${
-              currentTab === 'leads'
-                ? 'text-sky-400 font-extrabold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Users size={18} />
-            <span className="text-[10px]">Leads ({total})</span>
-          </button>
+      {/* ── STICKY MOBILE BOTTOM BAR (Clean Light Theme) ── */}
+      <nav className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-4 py-2 flex items-center justify-around z-40 md:hidden shadow-lg">
+        <button
+          onClick={() => setCurrentTab('leads')}
+          className={`flex flex-col items-center gap-0.5 text-[11px] font-semibold transition-colors ${
+            currentTab === 'leads' ? 'text-indigo-600' : 'text-slate-500'
+          }`}
+        >
+          <Users size={18} />
+          <span>Leads</span>
+        </button>
 
-          {/* Tab 2: Analytics */}
-          <button
-            onClick={() => setCurrentTab('analytics')}
-            className={`flex flex-col items-center gap-1 py-1.5 rounded-xl transition-all ${
-              currentTab === 'analytics'
-                ? 'text-sky-400 font-extrabold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <BarChart3 size={18} />
-            <span className="text-[10px]">Analytics</span>
-          </button>
+        <button
+          onClick={() => setCurrentTab('scheduler')}
+          className={`flex flex-col items-center gap-0.5 text-[11px] font-semibold transition-colors ${
+            currentTab === 'scheduler' ? 'text-indigo-600' : 'text-slate-500'
+          }`}
+        >
+          <Zap size={18} className={currentTab === 'scheduler' ? 'fill-amber-400 text-amber-500' : ''} />
+          <span>3x AI</span>
+        </button>
 
-          {/* Tab 3: 24/7 Hunter */}
-          <button
-            onClick={() => setCurrentTab('scheduler')}
-            className={`flex flex-col items-center gap-1 py-1.5 rounded-xl transition-all relative ${
-              currentTab === 'scheduler'
-                ? 'text-sky-400 font-extrabold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Bot size={18} />
-            <span className="text-[10px]">24/7 Engine</span>
-            {schedulerStatus?.is_enabled && (
-              <span className="absolute top-1.5 right-6 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            )}
-          </button>
+        <button
+          onClick={() => setCurrentTab('analytics')}
+          className={`flex flex-col items-center gap-0.5 text-[11px] font-semibold transition-colors ${
+            currentTab === 'analytics' ? 'text-indigo-600' : 'text-slate-500'
+          }`}
+        >
+          <BarChart3 size={18} />
+          <span>Analytics</span>
+        </button>
 
-          {/* Tab 4: Activity Log */}
-          <button
-            onClick={() => setCurrentTab('activity')}
-            className={`flex flex-col items-center gap-1 py-1.5 rounded-xl transition-all ${
-              currentTab === 'activity'
-                ? 'text-sky-400 font-extrabold'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Activity size={18} />
-            <span className="text-[10px]">Activity</span>
-          </button>
-        </div>
+        <button
+          onClick={() => setCurrentTab('activity')}
+          className={`flex flex-col items-center gap-0.5 text-[11px] font-semibold transition-colors ${
+            currentTab === 'activity' ? 'text-indigo-600' : 'text-slate-500'
+          }`}
+        >
+          <Activity size={18} />
+          <span>Audit</span>
+        </button>
       </nav>
 
-      {/* ── Manual Scrape Modal ── */}
+      {/* ── MODALS ── */}
       {showScrapeModal && (
         <ScrapeModal
           onClose={() => setShowScrapeModal(false)}
@@ -525,7 +594,6 @@ export default function App() {
         />
       )}
 
-      {/* ── Network & Server Settings Modal ── */}
       {showSettingsModal && (
         <SettingsModal
           onClose={() => setShowSettingsModal(false)}
