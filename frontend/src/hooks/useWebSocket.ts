@@ -1,5 +1,6 @@
-// src/hooks/useWebSocket.ts
+// src/hooks/useWebSocket.ts — Bulletproof WebSocket with Auto-Discovery & Cloud Port Normalization
 import { useEffect, useRef, useState } from 'react'
+import { getApiBaseUrl } from '../api/client'
 
 export interface WsMessage {
   type: string
@@ -18,9 +19,21 @@ export function useWebSocket() {
 
     const connect = () => {
       try {
-        const hostname = window.location.hostname || 'localhost'
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        const wsUrl = `${wsProtocol}//${hostname}:8000/ws/live`
+        const baseUrl = getApiBaseUrl()
+        // Convert http/https baseUrl to ws/wss URL
+        let wsUrl: string
+        try {
+          const urlObj = new URL(baseUrl)
+          const protocol = urlObj.protocol === 'https:' ? 'wss:' : 'ws:'
+          // On cloud providers (Render, Railway), traffic is routed via 443/80, no port in hostname
+          const host = urlObj.host // includes port only if specified in baseUrl
+          wsUrl = `${protocol}//${host}/ws/live`
+        } catch {
+          const hostname = window.location.hostname || 'localhost'
+          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+          const port = window.location.port ? `:${window.location.port}` : ''
+          wsUrl = `${protocol}//${hostname}${port}/ws/live`
+        }
 
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
@@ -44,8 +57,8 @@ export function useWebSocket() {
         ws.onclose = () => {
           if (!unmounted) {
             setIsConnected(false)
-            // Auto reconnect after 4 seconds
-            reconnectTimeoutRef.current = window.setTimeout(connect, 4000)
+            // Auto reconnect after 3 seconds
+            reconnectTimeoutRef.current = window.setTimeout(connect, 3000)
           }
         }
 
@@ -54,19 +67,19 @@ export function useWebSocket() {
         }
       } catch {
         if (!unmounted) {
-          reconnectTimeoutRef.current = window.setTimeout(connect, 4000)
+          reconnectTimeoutRef.current = window.setTimeout(connect, 3000)
         }
       }
     }
 
     connect()
 
-    // Send keepalive ping every 25s
+    // Send keepalive ping every 20s
     const pingInterval = setInterval(() => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send('ping')
       }
-    }, 25000)
+    }, 20000)
 
     return () => {
       unmounted = true
@@ -78,3 +91,4 @@ export function useWebSocket() {
 
   return { isConnected, lastMessage }
 }
+

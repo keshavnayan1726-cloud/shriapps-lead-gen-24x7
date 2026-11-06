@@ -140,20 +140,31 @@ async def execute_agent_hunt(
     agent_id: int,
     target_query: Optional[str] = None,
     max_results: Optional[int] = None,
+    force: bool = False,
 ) -> dict:
     """
     Executes a single AI Hunter independently.
     Can run concurrently alongside the other 2 hunters without conflict.
+    Includes auto-unfreeze for resilience.
     """
     agent = AI_AGENTS_CONFIG.get(agent_id)
     if not agent:
         return {"status": "error", "message": f"Agent {agent_id} not found."}
 
-    if agent["is_running"]:
-        logger.warning(f"{agent['name']} is already running. Skipping trigger.")
-        return {"status": "busy", "message": f"{agent['name']} is currently busy."}
+    now = datetime.now(timezone.utc)
+    started_at = agent.get("started_at")
+
+    # If running for more than 40 seconds, auto-release stuck state
+    if agent.get("is_running"):
+        if force or (started_at and (now - started_at).total_seconds() > 40):
+            logger.warning(f"Auto-unfreezing {agent['name']} (was stuck or forced).")
+            agent["is_running"] = False
+        else:
+            logger.warning(f"{agent['name']} is currently busy. Skipping trigger.")
+            return {"status": "busy", "message": f"{agent['name']} is currently busy."}
 
     agent["is_running"] = True
+    agent["started_at"] = now
     max_count = max_results or settings.AUTO_SCRAPE_MAX_RESULTS
 
     # Determine sector query for this agent
@@ -198,7 +209,7 @@ async def execute_agent_hunt(
     error_msg: Optional[str] = None
 
     try:
-        # Run Playwright Scraping & AI Enrichment
+        # Run Bulletproof Scraping & AI Enrichment
         enriched_leads = await run_scrape_pipeline(
             query=target_query,
             max_results=max_count,
@@ -207,7 +218,7 @@ async def execute_agent_hunt(
 
         async with AsyncSessionLocal() as db:
             for el in enriched_leads:
-                # Deduplicate by business_name + phone or address
+                # Deduplicate by business_name
                 stmt = select(Lead).where(Lead.business_name == el.business_name)
                 existing = (await db.execute(stmt)).scalar_one_or_none()
 
@@ -225,9 +236,32 @@ async def execute_agent_hunt(
                         problems_identified=el.problems_identified,
                         sales_pitch=el.sales_pitch,
                         source_query=el.source_query,
+                        deal_value=35000,
                     )
                     db.add(new_lead)
+                    await db.flush()
                     saved_count += 1
+
+                    # Stream lead card live to UI via WebSocket
+                    await manager.broadcast({
+                        "type": "NEW_LEAD",
+                        "lead": {
+                            "id": new_lead.id,
+                            "business_name": new_lead.business_name,
+                            "category": new_lead.category,
+                            "address": new_lead.address,
+                            "phone": new_lead.phone,
+                            "website": new_lead.website,
+                            "rating": new_lead.rating,
+                            "reviews_count": new_lead.reviews_count,
+                            "lead_score": new_lead.lead_score,
+                            "problems_identified": new_lead.problems_identified,
+                            "sales_pitch": new_lead.sales_pitch,
+                            "deal_value": new_lead.deal_value,
+                            "status": "new",
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    })
 
             agent["leads_found"] += saved_count
 
@@ -281,6 +315,7 @@ async def execute_agent_hunt(
         })
     finally:
         agent["is_running"] = False
+        agent["started_at"] = None
 
     return {
         "agent_id": agent["id"],
@@ -291,16 +326,37 @@ async def execute_agent_hunt(
     }
 
 
+async def reset_all_agents_and_jobs() -> dict:
+    """Safely recovers all 3 agents and marks stuck running jobs as completed."""
+    for a in AI_AGENTS_CONFIG.values():
+        a["is_running"] = False
+        a["started_at"] = None
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            text("UPDATE scrape_jobs SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE status = 'running'")
+        )
+        await db.commit()
+
+    logger.info("🧹 All AI agents and scrape jobs safely reset.")
+    return {"status": "ok", "message": "All agents and active jobs have been reset."}
+
+
 async def execute_all_agents_simultaneously(max_results_per_agent: int = 12) -> list[dict]:
     """
     Launches all 3 AI Hunters in parallel simultaneously.
     Triple lead acquisition rate across F&B, Healthcare, and Luxury Retail/Real Estate.
     """
     logger.info("🚀 Launching ALL 3 AI Hunters simultaneously in parallel!")
+    # Clear any residual running lock
+    for a in AI_AGENTS_CONFIG.values():
+        a["is_running"] = False
+        a["started_at"] = None
+
     tasks = [
-        execute_agent_hunt(agent_id=1, max_results=max_results_per_agent),
-        execute_agent_hunt(agent_id=2, max_results=max_results_per_agent),
-        execute_agent_hunt(agent_id=3, max_results=max_results_per_agent),
+        execute_agent_hunt(agent_id=1, max_results=max_results_per_agent, force=True),
+        execute_agent_hunt(agent_id=2, max_results=max_results_per_agent, force=True),
+        execute_agent_hunt(agent_id=3, max_results=max_results_per_agent, force=True),
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     clean_results = []

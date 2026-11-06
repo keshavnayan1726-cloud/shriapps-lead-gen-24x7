@@ -73,6 +73,7 @@ from scheduler import (
     execute_all_agents_simultaneously,
     get_agents_status_list,
     get_scheduler_status_details,
+    reset_all_agents_and_jobs,
     start_scheduler,
     stop_scheduler,
     toggle_scheduler,
@@ -89,6 +90,8 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize SQLite schemas and launch 24/7 autonomous scheduler
     await init_db()
     logger.info("Database initialised.")
+    # Safe reset of any residual running jobs on container boot
+    await reset_all_agents_and_jobs()
     await start_scheduler()
     logger.info("24/7 Lead Hunter is running.")
     yield
@@ -628,6 +631,13 @@ async def get_agents():
     return get_agents_status_list()
 
 
+@app.post("/api/agents/reset", tags=["AI Engine"])
+async def reset_agents_endpoint():
+    """Manually unstuck and reset all AI hunters and running jobs."""
+    res = await reset_all_agents_and_jobs()
+    return res
+
+
 @app.post("/api/scrape/trigger", response_model=ScrapeResponse, tags=["Scraping"])
 async def manual_trigger_scrape(
     payload: ScrapeRequest,
@@ -653,6 +663,7 @@ async def manual_trigger_scrape(
             agent_id=payload.agent_id,
             target_query=payload.query.strip() if payload.query else None,
             max_results=payload.max_results,
+            force=True,
         )
         agent_names = {1: "Hunter Alpha (F&B)", 2: "Hunter Beta (Healthcare)", 3: "Hunter Gamma (Retail/Property)"}
         name = agent_names.get(payload.agent_id, "AI Hunter")
@@ -670,6 +681,7 @@ async def manual_trigger_scrape(
             agent_id=1,
             target_query=target,
             max_results=payload.max_results,
+            force=True,
         )
         return ScrapeResponse(
             job_id=0,

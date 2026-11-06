@@ -128,6 +128,12 @@ async def init_db() -> None:
                 await conn.execute(text("ALTER TABLE leads ADD COLUMN deal_value INTEGER DEFAULT 25000"))
             if "followup_sequence" not in cols:
                 await conn.execute(text("ALTER TABLE leads ADD COLUMN followup_sequence TEXT"))
+
+            # Check and migrate scrape_jobs table
+            res_jobs = await conn.execute(text("PRAGMA table_info(scrape_jobs)"))
+            cols_jobs = {row[1] for row in res_jobs.fetchall()}
+            if "agent_name" not in cols_jobs:
+                await conn.execute(text("ALTER TABLE scrape_jobs ADD COLUMN agent_name VARCHAR(50)"))
         except Exception:
             pass
 

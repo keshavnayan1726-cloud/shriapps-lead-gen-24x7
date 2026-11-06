@@ -25,12 +25,17 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
             logger.info(f"WebSocket client disconnected. Total active: {len(self.active_connections)}")
 
-    async def broadcast(self, event_type: str, data: Any) -> None:
-        """Broadcast structured event to all connected clients."""
+    async def broadcast(self, event_type_or_payload: Any, data: Any = None) -> None:
+        """Broadcast structured event to all connected clients. Supports dict or (event_type, data)."""
         if not self.active_connections:
             return
 
-        payload = json.dumps({"type": event_type, "data": data}, default=str)
+        if isinstance(event_type_or_payload, dict):
+            payload_dict = event_type_or_payload
+        else:
+            payload_dict = {"type": str(event_type_or_payload), "data": data}
+
+        payload = json.dumps(payload_dict, default=str)
         dead_connections: list[WebSocket] = []
 
         for connection in self.active_connections:

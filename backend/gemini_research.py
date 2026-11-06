@@ -26,8 +26,8 @@ _active_model_name: str = "gemini-1.5-pro"
 def get_research_model(api_key: Optional[str] = None, preferred_model: Optional[str] = None) -> Tuple[Optional[genai.GenerativeModel], str]:
     """Initializes or returns a cached Gemini model with Pro thinking capabilities."""
     global _gemini_client, _active_model_name
-    key = api_key or settings.GEMINI_API_KEY
-    if not key or key == "your_gemini_api_key_here":
+    key = api_key or os.getenv("GEMINI_API_KEY") or settings.GEMINI_API_KEY
+    if not key or key.strip() in ("", "your_gemini_api_key_here") or not key.startswith("AIza"):
         return None, "none"
 
     if preferred_model:
