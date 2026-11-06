@@ -11,15 +11,25 @@ import { buildWhatsAppUrl, cleanPhone } from '../utils/whatsapp'
 import StatusBadge from './StatusBadge'
 import LeadScoreBadge from './LeadScoreBadge'
 
-const STATUS_OPTIONS: LeadStatus[] = ['new', 'contacted', 'interested', 'closed', 'rejected']
+const STATUS_OPTIONS: LeadStatus[] = ['new', 'audited', 'contacted', 'interested', 'proposal_sent', 'closed', 'rejected']
 
 interface Props {
   lead: Lead
   onUpdate: (updated: Lead) => void
   onDelete: (id: number) => void
+  onOpenAudit?: (lead: Lead) => void
+  onOpenProposal?: (lead: Lead) => void
+  onOpenSequence?: (lead: Lead) => void
 }
 
-export default function LeadCard({ lead, onUpdate, onDelete }: Props) {
+export default function LeadCard({
+  lead,
+  onUpdate,
+  onDelete,
+  onOpenAudit,
+  onOpenProposal,
+  onOpenSequence,
+}: Props) {
   const [expanded, setExpanded] = useState(false)
   const [editingNotes, setEditingNotes] = useState(false)
   const [notes, setNotes] = useState(lead.notes ?? '')
@@ -166,6 +176,40 @@ export default function LeadCard({ lead, onUpdate, onDelete }: Props) {
             <AlertTriangle size={11} /> No website (High opportunity)
           </span>
         )}
+      </div>
+
+      {/* Agency Quick Toolkit Row */}
+      <div className="flex items-center gap-1.5 mt-2.5 pt-2 border-t border-slate-100 flex-wrap">
+        {onOpenAudit && (
+          <button
+            onClick={() => onOpenAudit(lead)}
+            className="text-[11px] font-semibold py-1 px-2.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/60 transition-colors flex items-center gap-1 active:scale-95"
+            title="Run Gemini Pro Deep Audit"
+          >
+            <span>🔬 AI Audit</span>
+          </button>
+        )}
+        {onOpenProposal && (
+          <button
+            onClick={() => onOpenProposal(lead)}
+            className="text-[11px] font-semibold py-1 px-2.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/60 transition-colors flex items-center gap-1 active:scale-95"
+            title="Generate B2B Proposal & Quote"
+          >
+            <span>📑 Proposal</span>
+          </button>
+        )}
+        {onOpenSequence && (
+          <button
+            onClick={() => onOpenSequence(lead)}
+            className="text-[11px] font-semibold py-1 px-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/60 transition-colors flex items-center gap-1 active:scale-95"
+            title="View 3-Touch WhatsApp Sequence"
+          >
+            <span>💬 3-Touch Sequence</span>
+          </button>
+        )}
+        <div className="ml-auto text-[11px] font-extrabold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
+          ₹{(lead.deal_value || 25000).toLocaleString('en-IN')}
+        </div>
       </div>
 
       {/* Main Action Buttons */}

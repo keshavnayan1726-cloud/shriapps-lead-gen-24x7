@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -31,8 +32,10 @@ class Base(DeclarativeBase):
 
 class LeadStatus(str, enum.Enum):
     NEW = "new"
+    AUDITED = "audited"
     CONTACTED = "contacted"
     INTERESTED = "interested"
+    PROPOSAL_SENT = "proposal_sent"
     CLOSED = "closed"
     REJECTED = "rejected"
 
@@ -55,6 +58,12 @@ class Lead(Base):
     lead_score = Column(Integer, default=50, index=True)  # 1 to 100
     problems_identified = Column(Text, nullable=True)
     sales_pitch = Column(Text, nullable=True)
+
+    # Agency & Gemini Pro Research Toolkit
+    audit_report = Column(Text, nullable=True)  # JSON or markdown audit from Gemini Pro
+    proposal_content = Column(Text, nullable=True)  # Full B2B agency proposal
+    deal_value = Column(Integer, default=25000, nullable=False)  # Deal size in INR
+    followup_sequence = Column(Text, nullable=True)  # 3-touch WhatsApp sequence
 
     # CRM Pipeline & Metadata
     source_query = Column(String(255), nullable=True)
@@ -103,9 +112,24 @@ class SchedulerConfig(Base):
 
 
 async def init_db() -> None:
-    """Create all tables and seed default scheduler config if needed."""
+    """Create all tables and migrate columns if needed."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Check and migrate columns in existing leads table
+        try:
+            res = await conn.execute(text("PRAGMA table_info(leads)"))
+            cols = {row[1] for row in res.fetchall()}
+            if "audit_report" not in cols:
+                await conn.execute(text("ALTER TABLE leads ADD COLUMN audit_report TEXT"))
+            if "proposal_content" not in cols:
+                await conn.execute(text("ALTER TABLE leads ADD COLUMN proposal_content TEXT"))
+            if "deal_value" not in cols:
+                await conn.execute(text("ALTER TABLE leads ADD COLUMN deal_value INTEGER DEFAULT 25000"))
+            if "followup_sequence" not in cols:
+                await conn.execute(text("ALTER TABLE leads ADD COLUMN followup_sequence TEXT"))
+        except Exception:
+            pass
 
 
 async def get_db():

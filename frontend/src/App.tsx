@@ -20,15 +20,23 @@ import SchedulerView from './components/SchedulerView'
 import ActivityView from './components/ActivityView'
 import ScrapeModal from './components/ScrapeModal'
 import SettingsModal from './components/SettingsModal'
+import GeminiResearchModal from './components/GeminiResearchModal'
+import ProposalModal from './components/ProposalModal'
+import OutreachSequenceModal from './components/OutreachSequenceModal'
+import PipelineView from './components/PipelineView'
+import CloudStatusModal from './components/CloudStatusModal'
 import { useWebSocket } from './hooks/useWebSocket'
+import { Cloud, DollarSign } from 'lucide-react'
 
-type TabType = 'leads' | 'analytics' | 'scheduler' | 'activity'
+type TabType = 'leads' | 'pipeline' | 'analytics' | 'scheduler' | 'activity'
 
 const STATUS_FILTERS: Array<{ label: string; value: LeadStatus | '' }> = [
   { label: 'All Statuses', value: '' },
   { label: 'New', value: 'new' },
-  { label: 'Contacted', value: 'contacted' },
+  { label: 'Audited 🔬', value: 'audited' },
+  { label: 'Pitch Sent 💬', value: 'contacted' },
   { label: 'Interested ⭐', value: 'interested' },
+  { label: 'Proposal Sent 📑', value: 'proposal_sent' },
   { label: 'Closed Won 🏆', value: 'closed' },
   { label: 'Archived', value: 'rejected' },
 ]
@@ -59,6 +67,10 @@ export default function App() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [showScrapeModal, setShowScrapeModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
+  const [showCloudModal, setShowCloudModal] = useState(false)
+  const [activeAuditLead, setActiveAuditLead] = useState<Lead | null>(null)
+  const [activeProposalLead, setActiveProposalLead] = useState<Lead | null>(null)
+  const [activeSequenceLead, setActiveSequenceLead] = useState<Lead | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [error, setError] = useState('')
 
@@ -229,6 +241,16 @@ export default function App() {
 
           {/* Top Actions & Network Status */}
           <div className="flex items-center gap-2">
+            {/* Cloud 24/7 Deployment Hub */}
+            <button
+              onClick={() => setShowCloudModal(true)}
+              className="bg-sky-50 hover:bg-sky-100 text-sky-800 text-xs font-semibold px-2.5 py-1.5 rounded-xl border border-sky-200 transition-all flex items-center gap-1.5 active:scale-95"
+              title="Cloud 24/7 Status & Zero-RAM Discovery"
+            >
+              <Cloud size={13} className="text-sky-600" />
+              <span className="hidden sm:inline">Cloud 24/7</span>
+            </button>
+
             {/* Deploy 3x AI Button */}
             <button
               onClick={handleTripleFleetDeploy}
@@ -333,12 +355,24 @@ export default function App() {
               }`}
             >
               <Users size={14} />
-              <span>Leads Pipeline</span>
+              <span>Leads Feed</span>
               <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
                 currentTab === 'leads' ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-700'
               }`}>
                 {total}
               </span>
+            </button>
+
+            <button
+              onClick={() => setCurrentTab('pipeline')}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                currentTab === 'pipeline'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <DollarSign size={14} />
+              <span>Deals Pipeline</span>
             </button>
 
             <button
@@ -496,6 +530,9 @@ export default function App() {
                     lead={lead}
                     onUpdate={handleUpdateLead}
                     onDelete={handleDeleteLead}
+                    onOpenAudit={(l) => setActiveAuditLead(l)}
+                    onOpenProposal={(l) => setActiveProposalLead(l)}
+                    onOpenSequence={(l) => setActiveSequenceLead(l)}
                   />
                 ))}
               </div>
@@ -528,6 +565,15 @@ export default function App() {
           </div>
         )}
 
+        {/* ── TAB: DEALS CRM PIPELINE ── */}
+        {currentTab === 'pipeline' && (
+          <PipelineView
+            onOpenAudit={(l) => setActiveAuditLead(l)}
+            onOpenProposal={(l) => setActiveProposalLead(l)}
+            onOpenSequence={(l) => setActiveSequenceLead(l)}
+          />
+        )}
+
         {/* ── TAB 2: 3x AI FLEET / 24x7 ENGINE ── */}
         {currentTab === 'scheduler' && <SchedulerView />}
 
@@ -541,45 +587,53 @@ export default function App() {
       </main>
 
       {/* ── STICKY MOBILE BOTTOM BAR (Clean Light Theme) ── */}
-      <nav className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-4 py-2 flex items-center justify-around z-40 md:hidden shadow-lg">
+      <nav className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-2 flex items-center justify-around z-40 md:hidden shadow-lg">
         <button
           onClick={() => setCurrentTab('leads')}
-          className={`flex flex-col items-center gap-0.5 text-[11px] font-semibold transition-colors ${
+          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-colors ${
             currentTab === 'leads' ? 'text-indigo-600' : 'text-slate-500'
           }`}
         >
-          <Users size={18} />
+          <Users size={17} />
           <span>Leads</span>
         </button>
 
         <button
+          onClick={() => setCurrentTab('pipeline')}
+          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-colors ${
+            currentTab === 'pipeline' ? 'text-indigo-600' : 'text-slate-500'
+          }`}
+        >
+          <DollarSign size={17} />
+          <span>Pipeline</span>
+        </button>
+
+        <button
           onClick={() => setCurrentTab('scheduler')}
-          className={`flex flex-col items-center gap-0.5 text-[11px] font-semibold transition-colors ${
+          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-colors ${
             currentTab === 'scheduler' ? 'text-indigo-600' : 'text-slate-500'
           }`}
         >
-          <Zap size={18} className={currentTab === 'scheduler' ? 'fill-amber-400 text-amber-500' : ''} />
+          <Zap size={17} className={currentTab === 'scheduler' ? 'fill-amber-400 text-amber-500' : ''} />
           <span>3x AI</span>
         </button>
 
         <button
           onClick={() => setCurrentTab('analytics')}
-          className={`flex flex-col items-center gap-0.5 text-[11px] font-semibold transition-colors ${
+          className={`flex flex-col items-center gap-0.5 text-[10px] font-semibold transition-colors ${
             currentTab === 'analytics' ? 'text-indigo-600' : 'text-slate-500'
           }`}
         >
-          <BarChart3 size={18} />
+          <BarChart3 size={17} />
           <span>Analytics</span>
         </button>
 
         <button
-          onClick={() => setCurrentTab('activity')}
-          className={`flex flex-col items-center gap-0.5 text-[11px] font-semibold transition-colors ${
-            currentTab === 'activity' ? 'text-indigo-600' : 'text-slate-500'
-          }`}
+          onClick={() => setShowCloudModal(true)}
+          className="flex flex-col items-center gap-0.5 text-[10px] font-semibold text-sky-600"
         >
-          <Activity size={18} />
-          <span>Audit</span>
+          <Cloud size={17} />
+          <span>Cloud 24/7</span>
         </button>
       </nav>
 
@@ -603,6 +657,51 @@ export default function App() {
           }}
         />
       )}
+
+      {/* ── GEMINI PRO DEEP AUDIT MODAL ── */}
+      {activeAuditLead && (
+        <GeminiResearchModal
+          lead={activeAuditLead}
+          isOpen={Boolean(activeAuditLead)}
+          onClose={() => setActiveAuditLead(null)}
+          onLeadUpdated={(updated) => {
+            handleUpdateLead(updated)
+            setActiveAuditLead(updated)
+          }}
+        />
+      )}
+
+      {/* ── B2B PROPOSAL MODAL ── */}
+      {activeProposalLead && (
+        <ProposalModal
+          lead={activeProposalLead}
+          isOpen={Boolean(activeProposalLead)}
+          onClose={() => setActiveProposalLead(null)}
+          onLeadUpdated={(updated) => {
+            handleUpdateLead(updated)
+            setActiveProposalLead(updated)
+          }}
+        />
+      )}
+
+      {/* ── 3-TOUCH WHATSAPP SEQUENCE MODAL ── */}
+      {activeSequenceLead && (
+        <OutreachSequenceModal
+          lead={activeSequenceLead}
+          isOpen={Boolean(activeSequenceLead)}
+          onClose={() => setActiveSequenceLead(null)}
+        />
+      )}
+
+      {/* ── 24/7 CLOUD HOSTING & DISCOVERY MODAL ── */}
+      <CloudStatusModal
+        isOpen={showCloudModal}
+        onClose={() => setShowCloudModal(false)}
+        onDiscoverySuccess={() => {
+          loadLeadsData()
+          fetchStats().then(setStats).catch(() => {})
+        }}
+      />
     </div>
   )
 }

@@ -7,7 +7,9 @@ import csv
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import io
+import json
 import logging
+import os
 
 from fastapi import (
     BackgroundTasks,
@@ -48,12 +50,23 @@ from schemas import (
     LeadListResponse,
     LeadOut,
     LeadUpdate,
+    OutreachSequenceResponse,
+    PipelineOverviewResponse,
+    PipelineStageData,
+    ProposalGenerateResponse,
+    ResearchAuditResponse,
     SchedulerConfigRequest,
     SchedulerStatusResponse,
     ScrapeJobOut,
     ScrapeRequest,
     ScrapeResponse,
     StatsResponse,
+)
+from gemini_research import (
+    generate_agency_proposal,
+    generate_outreach_sequence,
+    run_gemini_cloud_lead_discovery,
+    run_gemini_pro_audit,
 )
 from scheduler import (
     execute_agent_hunt,
@@ -332,6 +345,250 @@ async def delete_lead(lead_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Lead not found")
     await db.delete(lead)
     await db.commit()
+
+
+# ─────────────────────────── GEMINI PRO AGENCY TOOLKIT ─────────────
+
+@app.post("/api/leads/{lead_id}/research", response_model=ResearchAuditResponse, tags=["Agency Toolkit"])
+async def trigger_lead_research(lead_id: int, db: AsyncSession = Depends(get_db)):
+    """Runs a deep Gemini Pro audit on the lead, detects revenue leaks & tech vulnerabilities."""
+    lead = await db.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    lead_dict = {
+        "id": lead.id,
+        "business_name": lead.business_name,
+        "category": lead.category or "",
+        "address": lead.address or "",
+        "phone": lead.phone or "",
+        "website": lead.website or "",
+        "rating": lead.rating or "",
+        "reviews_count": lead.reviews_count or "",
+    }
+
+    audit = await run_gemini_pro_audit(lead_dict)
+
+    # Save into DB
+    lead.audit_report = audit.get("audit_markdown", "")
+    lead.deal_value = audit.get("suggested_deal_value_inr", lead.deal_value or 25000)
+    lead.lead_score = max(lead.lead_score or 50, audit.get("digital_maturity_score", 50))
+    if lead.status == LeadStatus.NEW:
+        lead.status = LeadStatus.AUDITED
+
+    # Log activity
+    db.add(
+        ActivityLog(
+            event_type="audit_completed",
+            title=f"🔬 Gemini Pro Audited: {lead.business_name}",
+            description=f"Identified revenue leak: {audit.get('estimated_monthly_loss_inr', 'N/A')}. Suggested deal value: ₹{lead.deal_value:,}.",
+        )
+    )
+    await db.commit()
+    await db.refresh(lead)
+
+    await manager.broadcast(
+        "LEAD_UPDATED",
+        {"id": lead.id, "status": lead.status.value, "business_name": lead.business_name},
+    )
+    return audit
+
+
+@app.post("/api/leads/{lead_id}/proposal", response_model=ProposalGenerateResponse, tags=["Agency Toolkit"])
+async def trigger_lead_proposal(lead_id: int, db: AsyncSession = Depends(get_db)):
+    """Generates a complete B2B agency proposal with 3-tier pricing packages in INR."""
+    lead = await db.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    lead_dict = {
+        "id": lead.id,
+        "business_name": lead.business_name,
+        "category": lead.category or "",
+        "address": lead.address or "",
+        "phone": lead.phone or "",
+        "website": lead.website or "",
+    }
+
+    proposal = await generate_agency_proposal(lead_dict)
+
+    # Save to DB
+    lead.proposal_content = proposal.get("proposal_markdown", "")
+    lead.deal_value = proposal.get("suggested_deal_value_inr", lead.deal_value or 38000)
+    if lead.status in [LeadStatus.NEW, LeadStatus.AUDITED]:
+        lead.status = LeadStatus.PROPOSAL_SENT
+
+    db.add(
+        ActivityLog(
+            event_type="proposal_generated",
+            title=f"📑 Proposal Generated for {lead.business_name}",
+            description=f"Generated Shri Apps and Web proposal. Recommended package: ₹{lead.deal_value:,}.",
+        )
+    )
+    await db.commit()
+    await db.refresh(lead)
+
+    await manager.broadcast(
+        "LEAD_UPDATED",
+        {"id": lead.id, "status": lead.status.value, "business_name": lead.business_name},
+    )
+    return proposal
+
+
+@app.get("/api/leads/{lead_id}/sequence", response_model=OutreachSequenceResponse, tags=["Agency Toolkit"])
+async def get_lead_outreach_sequence(lead_id: int, db: AsyncSession = Depends(get_db)):
+    """Retrieves or generates a 3-touch WhatsApp follow-up sequence with instant links."""
+    lead = await db.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    lead_dict = {
+        "id": lead.id,
+        "business_name": lead.business_name,
+        "category": lead.category or "",
+        "phone": lead.phone or "",
+    }
+
+    seq = generate_outreach_sequence(lead_dict)
+    lead.followup_sequence = json.dumps(seq)
+    await db.commit()
+    return seq
+
+
+@app.get("/api/pipeline", response_model=PipelineOverviewResponse, tags=["Agency Toolkit"])
+async def get_pipeline_overview(db: AsyncSession = Depends(get_db)):
+    """Provides a full CRM pipeline overview grouped by stages with total deal values in INR."""
+    stmt = select(Lead).order_by(desc(Lead.lead_score))
+    result = await db.execute(stmt)
+    all_leads = result.scalars().all()
+
+    stages_config = [
+        ("new", "New Leads"),
+        ("audited", "Audited by AI 🔬"),
+        ("contacted", "Pitch Sent 💬"),
+        ("interested", "Interested ⭐"),
+        ("proposal_sent", "Proposal Sent 📑"),
+        ("closed", "Closed Won 🏆"),
+        ("rejected", "Archived / Passed"),
+    ]
+
+    stage_data_list = []
+    total_val = 0
+    total_leads_count = len(all_leads)
+
+    for stage_key, stage_label in stages_config:
+        leads_in_stage = [
+            l
+            for l in all_leads
+            if (l.status.value if hasattr(l.status, "value") else str(l.status)) == stage_key
+        ]
+        stage_sum = sum(l.deal_value or 25000 for l in leads_in_stage)
+        if stage_key != "rejected":
+            total_val += stage_sum
+
+        stage_data_list.append(
+            PipelineStageData(
+                stage=stage_key,
+                label=stage_label,
+                count=len(leads_in_stage),
+                total_value_inr=stage_sum,
+                leads=[LeadOut.model_validate(l) for l in leads_in_stage],
+            )
+        )
+
+    return PipelineOverviewResponse(
+        total_pipeline_value_inr=total_val,
+        total_leads_in_pipeline=total_leads_count,
+        stages=stage_data_list,
+    )
+
+
+# ─────────────────────────── CLOUD 24/7 & DEPLOYMENT ───────────────
+
+@app.get("/api/cloud/status", tags=["Cloud 24/7"])
+async def get_cloud_deployment_status():
+    """Detects whether backend is running in cloud and provides connection/deployment metadata."""
+    is_render = bool(os.getenv("RENDER"))
+    is_railway = bool(os.getenv("RAILWAY_STATIC_URL") or os.getenv("RAILWAY_ENVIRONMENT"))
+    is_cloud = is_render or is_railway or bool(os.getenv("PORT") and not os.getenv("WINDIR"))
+
+    cloud_provider = (
+        "Render (Cloud)"
+        if is_render
+        else (
+            "Railway (Cloud)"
+            if is_railway
+            else ("Docker Cloud" if is_cloud else "Local Laptop")
+        )
+    )
+
+    return {
+        "is_cloud": is_cloud,
+        "provider": cloud_provider,
+        "status": "24/7 Running",
+        "instructions": (
+            "App is deployed in the cloud! It will run 24/7 autonomously even when your laptop is turned off."
+            if is_cloud
+            else "App is currently running on your local machine. Deploy to Render or Railway for 100% free 24/7 cloud operation."
+        ),
+        "deploy_url_render": "https://dashboard.render.com/select-repo?type=web",
+        "deploy_url_railway": "https://railway.app/new",
+    }
+
+
+@app.post("/api/cloud/discover", tags=["Cloud 24/7"])
+async def trigger_cloud_lead_discovery(payload: ScrapeRequest, db: AsyncSession = Depends(get_db)):
+    """Cloud-resilient lead discovery engine powered by Gemini Pro with zero browser RAM overhead."""
+    query = payload.query or "cafes and restaurants in Sector 29 Gurugram"
+    count = payload.max_results or 10
+
+    discovered = await run_gemini_cloud_lead_discovery(query=query, count=count)
+    saved_count = 0
+
+    for item in discovered:
+        name = item.get("name", "").strip()
+        if not name:
+            continue
+        stmt = select(Lead).where(Lead.business_name == name)
+        existing = (await db.execute(stmt)).scalar_one_or_none()
+        if not existing:
+            lead = Lead(
+                business_name=name,
+                category=item.get("category", ""),
+                address=item.get("address", ""),
+                phone=item.get("phone", ""),
+                website=item.get("website", ""),
+                rating=str(item.get("rating", "4.2")),
+                reviews_count=str(item.get("reviews_count", "50")),
+                lead_score=item.get("lead_score", 85),
+                problems_identified=item.get("problems_identified", ""),
+                sales_pitch=item.get("sales_pitch", ""),
+                source_query=f"Cloud AI: {query}",
+                deal_value=35000,
+            )
+            db.add(lead)
+            saved_count += 1
+
+    if saved_count > 0:
+        db.add(
+            ActivityLog(
+                event_type="cloud_discovery",
+                title=f"☁️ Cloud AI Discovered {saved_count} Leads",
+                description=f"Gemini Pro cloud engine retrieved {saved_count} businesses for '{query}'.",
+            )
+        )
+        await db.commit()
+        await manager.broadcast(
+            "SCRAPE_COMPLETED", {"leads_saved": saved_count, "query": query}
+        )
+
+    return {
+        "status": "success",
+        "query": query,
+        "discovered_count": len(discovered),
+        "saved_count": saved_count,
+        "message": f"Cloud AI discovered {len(discovered)} businesses, saved {saved_count} new high-converting leads.",
+    }
 
 
 # ─────────────────────────── 24/7 SCHEDULER & SCRAPER ─────────────

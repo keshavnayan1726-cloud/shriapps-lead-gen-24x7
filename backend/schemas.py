@@ -25,6 +25,10 @@ class LeadBase(BaseModel):
     sales_pitch: Optional[str] = None
     source_query: Optional[str] = None
     notes: Optional[str] = None
+    audit_report: Optional[str] = None
+    proposal_content: Optional[str] = None
+    deal_value: Optional[int] = 25000
+    followup_sequence: Optional[str] = None
 
 
 class LeadCreate(LeadBase):
@@ -38,6 +42,10 @@ class LeadUpdate(BaseModel):
     email: Optional[str] = None
     lead_score: Optional[int] = None
     sales_pitch: Optional[str] = None
+    audit_report: Optional[str] = None
+    proposal_content: Optional[str] = None
+    deal_value: Optional[int] = None
+    followup_sequence: Optional[str] = None
 
 
 class LeadOut(LeadBase):
@@ -156,3 +164,55 @@ class AnalyticsResponse(BaseModel):
     categories: list[AnalyticsCategoryItem]
     statuses: list[AnalyticsStatusItem]
     daily_trend: list[AnalyticsDailyItem]
+
+
+# --- Digital Agency & Gemini Pro Research Schemas ---
+
+class ResearchAuditResponse(BaseModel):
+    lead_id: int
+    business_name: str
+    digital_maturity_score: int
+    estimated_monthly_loss_inr: str
+    tech_vulnerabilities: list[str]
+    recommended_services: list[str]
+    executive_summary: str
+    irresistible_pitch: str
+    suggested_deal_value_inr: int
+    audit_markdown: str
+
+
+class ProposalGenerateResponse(BaseModel):
+    lead_id: int
+    business_name: str
+    proposal_markdown: str
+    suggested_deal_value_inr: int
+    packages: dict[str, Any]
+
+
+class SequenceTouch(BaseModel):
+    touch: int
+    title: str
+    delay_days: int
+    message: str
+    wa_link: str
+
+
+class OutreachSequenceResponse(BaseModel):
+    lead_id: int
+    business_name: str
+    phone: str
+    touches: list[SequenceTouch]
+
+
+class PipelineStageData(BaseModel):
+    stage: str
+    label: str
+    count: int
+    total_value_inr: int
+    leads: list[LeadOut]
+
+
+class PipelineOverviewResponse(BaseModel):
+    total_pipeline_value_inr: int
+    total_leads_in_pipeline: int
+    stages: list[PipelineStageData]

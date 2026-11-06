@@ -92,7 +92,7 @@ export const autoDiscoverBackend = async (): Promise<string> => {
   return current
 }
 
-export type LeadStatus = 'new' | 'contacted' | 'interested' | 'closed' | 'rejected'
+export type LeadStatus = 'new' | 'audited' | 'contacted' | 'interested' | 'proposal_sent' | 'closed' | 'rejected'
 
 export interface Lead {
   id: number
@@ -112,6 +112,10 @@ export interface Lead {
   created_at: string
   updated_at: string
   notes: string | null
+  audit_report?: string | null
+  proposal_content?: string | null
+  deal_value?: number
+  followup_sequence?: string | null
 }
 
 export interface LeadListResponse {
@@ -221,7 +225,21 @@ export const fetchAnalytics = () =>
 
 export const updateLead = (
   id: number,
-  data: Partial<Pick<Lead, 'status' | 'notes' | 'phone' | 'email' | 'sales_pitch' | 'lead_score'>>
+  data: Partial<
+    Pick<
+      Lead,
+      | 'status'
+      | 'notes'
+      | 'phone'
+      | 'email'
+      | 'sales_pitch'
+      | 'lead_score'
+      | 'deal_value'
+      | 'audit_report'
+      | 'proposal_content'
+      | 'followup_sequence'
+    >
+  >
 ) =>
   apiClient.patch<Lead>(`/api/leads/${id}`, data).then((r) => r.data)
 
@@ -300,3 +318,90 @@ export const testConnection = async (
     return { success: false, latency: Date.now() - start, error: err?.message || 'Connection failed' }
   }
 }
+
+// ── DIGITAL AGENCY & GEMINI PRO TOOLKIT APIS ──
+export interface ResearchAuditResponse {
+  lead_id: number
+  business_name: string
+  digital_maturity_score: number
+  estimated_monthly_loss_inr: string
+  tech_vulnerabilities: string[]
+  recommended_services: string[]
+  executive_summary: string
+  irresistible_pitch: string
+  suggested_deal_value_inr: number
+  audit_markdown: string
+}
+
+export interface ProposalGenerateResponse {
+  lead_id: number
+  business_name: string
+  proposal_markdown: string
+  suggested_deal_value_inr: number
+  packages: Record<string, any>
+}
+
+export interface SequenceTouch {
+  touch: number
+  title: string
+  delay_days: number
+  message: string
+  wa_link: string
+}
+
+export interface OutreachSequenceResponse {
+  lead_id: number
+  business_name: string
+  phone: string
+  touches: SequenceTouch[]
+}
+
+export interface PipelineStageData {
+  stage: string
+  label: string
+  count: number
+  total_value_inr: number
+  leads: Lead[]
+}
+
+export interface PipelineOverviewResponse {
+  total_pipeline_value_inr: number
+  total_leads_in_pipeline: number
+  stages: PipelineStageData[]
+}
+
+export interface CloudStatusResponse {
+  is_cloud: boolean
+  provider: string
+  status: string
+  instructions: string
+  deploy_url_render: string
+  deploy_url_railway: string
+}
+
+export const runLeadResearch = (leadId: number) =>
+  apiClient.post<ResearchAuditResponse>(`/api/leads/${leadId}/research`).then((r) => r.data)
+
+export const generateLeadProposal = (leadId: number) =>
+  apiClient.post<ProposalGenerateResponse>(`/api/leads/${leadId}/proposal`).then((r) => r.data)
+
+export const fetchLeadSequence = (leadId: number) =>
+  apiClient.get<OutreachSequenceResponse>(`/api/leads/${leadId}/sequence`).then((r) => r.data)
+
+export const fetchPipelineOverview = () =>
+  apiClient.get<PipelineOverviewResponse>('/api/pipeline').then((r) => r.data)
+
+export const fetchCloudStatus = () =>
+  apiClient.get<CloudStatusResponse>('/api/cloud/status').then((r) => r.data)
+
+export const triggerCloudDiscovery = (query: string, maxResults = 10) =>
+  apiClient
+    .post<{
+      status: string
+      query: string
+      discovered_count: number
+      saved_count: number
+      message: string
+    }>('/api/cloud/discover', { query, max_results: maxResults })
+    .then((r) => r.data)
+
